@@ -43,34 +43,43 @@ impl Trace for EvalTrace {
 }
 
 #[derive(Debug)]
-struct GradTracer {
-    value: f32,
-    grad: f32,
+struct GradTracer<T: Tracer> {
+    value: T,
+    grad: T,
 }
 
-impl GradTracer {
-    fn new(value: f32, grad: f32) -> Self {
-        Self{value, grad}
+impl<T: Tracer> GradTracer<T> {
+    fn new(value: T, grad: T) -> Self {
+        Self { value, grad }
     }
 }
 
-impl Tracer for GradTracer {
+impl<T: Tracer> Tracer for GradTracer<T> {
     fn add(&self, rhs: &Self) -> Self {
-        Self::new(self.value + rhs.value, self.grad + rhs.grad)
+        let value = self.value.add(&rhs.value);
+        let grad = self.grad.add(&rhs.grad);
+        Self::new(value, grad)
     }
 
     fn mul(&self, rhs: &Self) -> Self {
-        Self::new(self.value * rhs.value, self.value * rhs.grad + self.grad * rhs.value)
+        let value = self.value.mul(&rhs.value);
+        let grad = self.value.mul(&rhs.grad).add(&self.grad.mul(&rhs.value));
+        Self::new(value, grad)
     }
 }
 
-struct GradTrace {}
+struct GradTrace<Inner: Trace> {
+    inner: Inner,
+}
 
-impl Trace for GradTrace {
-    type Value = GradTracer;
+impl<Inner: Trace> Trace for GradTrace<Inner> {
+    type Value = GradTracer<Inner::Value>;
 
     fn constant(&self, value: f32) -> Self::Value {
-        Self::Value{value, grad: 0.0}
+        Self::Value {
+            value: self.inner.constant(value),
+            grad: self.inner.constant(0.0),
+        }
     }
 }
 
@@ -83,10 +92,16 @@ fn test_fn<T: Trace>(trace: &T, value: &T::Value) -> T::Value {
 fn main() {
     let x_for_eval = EvalTracer::new(3.0);
 
-    let eval_trace = EvalTrace{};
-    println!("Result of x^2+4x+6 at 3: {0:?}", test_fn(&eval_trace, &x_for_eval));
+    let eval_trace = EvalTrace {};
+    println!(
+        "Result of x^2+4x+6 at 3: {0:?}",
+        test_fn(&eval_trace, &x_for_eval)
+    );
 
-    let grad_trace = GradTrace{};
-    let x_for_grad = GradTracer::new(3.0, 1.0);
-    println!("Result (value, grad) of x^2+4x+6 at 3: {0:?}", test_fn(&grad_trace, &x_for_grad));
+    let grad_trace = GradTrace { inner: eval_trace };
+    let x_for_grad = GradTracer::new(x_for_eval, EvalTracer::new(1.0));
+    println!(
+        "Result (value, grad) of x^2+4x+6 at 3: {0:?}",
+        test_fn(&grad_trace, &x_for_grad)
+    );
 }
