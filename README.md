@@ -38,10 +38,11 @@ Here are some goals that we might but likely won't tackle:
 * Simple f32 tracer interface.
 * Simple eval tracing.
 * Simple grad tracing.
+* Composable grad tracing (WIP).
+  * Generic grad tracer (tracer of a tracer).
 
 **TODO**
 * Composable grad tracing.
-  * Generic grad tracer (tracer of a tracer).
   * Composable wrapper for grad.
 * Test for gradient, including composable functions.
 * Simple tracing into expressions.

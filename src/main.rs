@@ -98,10 +98,17 @@ fn main() {
         test_fn(&eval_trace, &x_for_eval)
     );
 
+    let x_for_grad = GradTracer::new(x_for_eval, eval_trace.constant(1.0));
     let grad_trace = GradTrace { inner: eval_trace };
-    let x_for_grad = GradTracer::new(x_for_eval, EvalTracer::new(1.0));
     println!(
         "Result (value, grad) of x^2+4x+6 at 3: {0:?}",
         test_fn(&grad_trace, &x_for_grad)
+    );
+
+    let x_for_grad2 = GradTracer::new(x_for_grad, grad_trace.constant(1.0));
+    let grad2_trace = GradTrace { inner: grad_trace };
+    println!(
+        "Result (value, grad^2) of x^2+4x+6 at 3: {0:?}",
+        test_fn(&grad2_trace, &x_for_grad2)
     );
 }
