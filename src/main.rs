@@ -7,11 +7,11 @@ trait Tracer {
 // Represents a trace.
 // Contains factory methods for creating tracers.
 trait Trace {
-    type Value: Tracer;
+    type Value: Tracer + Clone;
     fn constant(&self, value: f32) -> Self::Value;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct EvalTracer {
     value: f32,
 }
@@ -32,6 +32,7 @@ impl Tracer for EvalTracer {
     }
 }
 
+#[derive(Debug, Clone)]
 struct EvalTrace {}
 
 impl Trace for EvalTrace {
@@ -42,7 +43,7 @@ impl Trace for EvalTrace {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct GradTracer<T: Tracer> {
     value: T,
     grad: T,
@@ -68,6 +69,7 @@ impl<T: Tracer> Tracer for GradTracer<T> {
     }
 }
 
+#[derive(Debug, Clone)]
 struct GradTrace<Inner: Trace> {
     inner: Inner,
 }
@@ -89,6 +91,20 @@ fn test_fn<T: Trace>(trace: &T, value: &T::Value) -> T::Value {
     x_2.add(&x_times_4).add(&trace.constant(6.0))
 }
 
+fn grad<T: Trace + Clone, GF>(fun: GF) -> impl Fn(&T, &T::Value) -> T::Value
+where
+    GF: Fn(&GradTrace<T>, &<GradTrace<T> as Trace>::Value) -> <GradTrace<T> as Trace>::Value,
+{
+    move |trace, value| {
+        let value_for_grad = GradTracer::<T::Value>::new(value.clone(), trace.constant(1.0));
+        let grad_trace = GradTrace {
+            inner: trace.clone(),
+        };
+        let result = fun(&grad_trace, &value_for_grad);
+        result.grad
+    }
+}
+
 fn main() {
     let x_for_eval = EvalTracer::new(3.0);
 
@@ -98,17 +114,16 @@ fn main() {
         test_fn(&eval_trace, &x_for_eval)
     );
 
-    let x_for_grad = GradTracer::new(x_for_eval, eval_trace.constant(1.0));
-    let grad_trace = GradTrace { inner: eval_trace };
+    let grad_test_fn = grad::<EvalTrace, _>(test_fn);
+
     println!(
-        "Result (value, grad) of x^2+4x+6 at 3: {0:?}",
-        test_fn(&grad_trace, &x_for_grad)
+        "Gradient of x^2+4x+6 at 3: {0:?}",
+        grad_test_fn(&eval_trace, &x_for_eval)
     );
 
-    let x_for_grad2 = GradTracer::new(x_for_grad, grad_trace.constant(1.0));
-    let grad2_trace = GradTrace { inner: grad_trace };
+    let grad2_test_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(test_fn));
     println!(
-        "Result (value, grad^2) of x^2+4x+6 at 3: {0:?}",
-        test_fn(&grad2_trace, &x_for_grad2)
+        "Second gradient of x^2+4x+6 at 3: {0:?}",
+        grad2_test_fn(&eval_trace, &x_for_eval)
     );
 }
