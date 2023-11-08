@@ -11,24 +11,13 @@ trait Trace {
     fn constant(&self, value: f32) -> Self::Value;
 }
 
-#[derive(Debug, Clone)]
-struct EvalTracer {
-    value: f32,
-}
-
-impl EvalTracer {
-    fn new(value: f32) -> Self {
-        Self { value }
-    }
-}
-
-impl Tracer for EvalTracer {
+impl Tracer for f32 {
     fn add(&self, rhs: &Self) -> Self {
-        Self::new(self.value + rhs.value)
+        self + rhs
     }
 
     fn mul(&self, rhs: &Self) -> Self {
-        Self::new(self.value * rhs.value)
+        self * rhs
     }
 }
 
@@ -36,10 +25,10 @@ impl Tracer for EvalTracer {
 struct EvalTrace {}
 
 impl Trace for EvalTrace {
-    type Value = EvalTracer;
+    type Value = f32;
 
     fn constant(&self, value: f32) -> Self::Value {
-        Self::Value::new(value)
+        value
     }
 }
 
@@ -106,7 +95,7 @@ where
 }
 
 fn main() {
-    let x_for_eval = EvalTracer::new(3.0);
+    let x_for_eval = 3.0;
 
     let eval_trace = EvalTrace {};
     println!(
