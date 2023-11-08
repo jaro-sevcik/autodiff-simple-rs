@@ -40,11 +40,9 @@ Here are some goals that we might but likely won't tackle:
 * Simple grad tracing.
 * Composable grad tracing (WIP).
   * Generic grad tracer (tracer of a tracer).
+  * Composable wrapper for grad.
 
 **TODO**
-* Composable grad tracing.
-  * Composable wrapper for grad.
-* Test for gradient, including composable functions.
 * Simple tracing into expressions.
   * Composing grad with expression tracing (not sure how, yet, really).
   * Caching for compiled expressions.
