@@ -116,3 +116,22 @@ fn main() {
         grad2_test_fn(&eval_trace, &x_for_eval)
     );
 }
+
+#[test]
+fn eval_poly() {
+    let x = 3.0;
+    assert_eq!(test_fn(&EvalTrace {}, &x), 27.0); 
+}
+#[test]
+fn eval_grad_poly() {
+    let x = 3.0;
+    let grad_test_fn = grad::<EvalTrace, _>(test_fn);
+    assert_eq!(grad_test_fn(&EvalTrace {}, &x), 10.0); 
+}
+
+#[test]
+fn eval_grad_grad_poly() {
+    let x = 3.0;
+    let grad2_test_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(test_fn));
+    assert_eq!(grad2_test_fn(&EvalTrace {}, &x), 2.0); 
+}
