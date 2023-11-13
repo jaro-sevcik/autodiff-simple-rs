@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::rc::Rc;
 
 #[derive(Debug, Clone)]
 enum Primitive {
@@ -62,7 +62,7 @@ impl Trace for EvalTrace {
             Primitive::Mul => inputs[0] * inputs[1],
             Primitive::Block(b) => {
                 println!("Evaluating block {:?}", b);
-                evaluate_block(self, &b, inputs)
+                evaluate_block(self, b, inputs)
             }
         }
     }
@@ -112,7 +112,7 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
                 );
                 Self::Tracer::new(value, grad)
             }
-            Primitive::Block(b) => evaluate_block(self, &b, inputs),
+            Primitive::Block(b) => evaluate_block(self, b, inputs),
         }
     }
 }
@@ -133,10 +133,6 @@ where
 
 #[derive(Debug, Clone)]
 struct ExprTracer {
-    // TODO figure out what to do with the cyclic
-    // reference. Perhaps thios should be a reference with
-    // a lifetime at least as long as this object?
-    trace: ExprTrace,
     value: TracedArgument,
 }
 
@@ -165,13 +161,13 @@ impl TracedBlock {
 
 #[derive(Debug, Clone)]
 struct ExprTrace {
-    block: Arc<RefCell<TracedBlock>>,
+    block: Rc<RefCell<TracedBlock>>,
 }
 
 impl ExprTrace {
     fn new(inputs: usize) -> Self {
         Self {
-            block: Arc::new(RefCell::new(TracedBlock::new(inputs))),
+            block: Rc::new(RefCell::new(TracedBlock::new(inputs))),
         }
     }
 
@@ -192,7 +188,6 @@ impl Trace for ExprTrace {
         }
         let index = self.add_to_program(prim.clone(), expr_inputs);
         ExprTracer {
-            trace: self.clone(),
             value: TracedArgument::Local(index),
         }
     }
@@ -205,7 +200,6 @@ where
     move |in_trace, value| {
         let expr_trace = ExprTrace::new(1);
         let param_tracer = ExprTracer {
-            trace: expr_trace.clone(),
             value: TracedArgument::Input(0),
         };
         let output = fun(&expr_trace, &param_tracer).value;
