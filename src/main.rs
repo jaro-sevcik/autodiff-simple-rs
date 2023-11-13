@@ -60,7 +60,10 @@ impl Trace for EvalTrace {
             Primitive::Constant(c) => *c,
             Primitive::Add => inputs[0] + inputs[1],
             Primitive::Mul => inputs[0] * inputs[1],
-            Primitive::Block(b) => evaluate_block(self, &b, inputs),
+            Primitive::Block(b) => {
+                println!("Evaluating block {:?}", b);
+                evaluate_block(self, &b, inputs)
+            }
         }
     }
 }
@@ -195,20 +198,27 @@ impl Trace for ExprTrace {
     }
 }
 
-// fn jit<T: Trace + Clone, GF>(fun: GF) -> impl Fn(&T, &T::Value) -> T::Value
-// where
-//     GF: Fn(&ExprTrace, &<ExprTrace as Trace>::Value) -> <ExprTrace as Trace>::Value,
-// {
-//     move |_trace, value| {
-//         // let value_for_grad = GradTracer::<T::Value>::new(value.clone(), trace.constant(1.0));
-//         // let grad_trace = GradTrace {
-//         //     inner: trace.clone(),
-//         // };
-//         // let result = fun(&grad_trace, &value_for_grad);
-//         // result.grad
-//         value.clone()
-//     }
-// }
+fn jit<T: Trace + Clone, GF>(fun: GF) -> impl Fn(&T, &T::Tracer) -> T::Tracer
+where
+    GF: Fn(&ExprTrace, &<ExprTrace as Trace>::Tracer) -> <ExprTrace as Trace>::Tracer,
+{
+    move |in_trace, value| {
+        let expr_trace = ExprTrace::new(1);
+        let param_tracer = ExprTracer {
+            trace: expr_trace.clone(),
+            value: TracedArgument::Input(0),
+        };
+        let output = fun(&expr_trace, &param_tracer).value;
+
+        let primitive = Primitive::Block(TracedBlock {
+            inputs: 1,
+            program: expr_trace.block.borrow().program.clone(),
+            output,
+        });
+
+        in_trace.primitive(&primitive, &[value])
+    }
+}
 
 fn test_fn<T: Trace>(trace: &T, value: &T::Tracer) -> T::Tracer {
     let x_2 = trace.mul(value, value);
@@ -236,6 +246,12 @@ fn main() {
     println!(
         "Second gradient of x^2+4x+6 at 3: {0:?}",
         grad2_test_fn(&eval_trace, &x_for_eval)
+    );
+
+    let jit_test_fn = jit::<EvalTrace, _>(test_fn);
+    println!(
+        "Jit of x^2+4x+6 at 3: {0:?}",
+        jit_test_fn(&eval_trace, &x_for_eval)
     );
 }
 
