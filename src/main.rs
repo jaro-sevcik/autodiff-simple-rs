@@ -247,6 +247,11 @@ fn main() {
         "Jit of x^2+4x+6 at 3: {0:?}",
         jit_test_fn(&eval_trace, &x_for_eval)
     );
+    let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_fn));
+    println!(
+        "Jit of grad of x^2+4x+6 at 3: {0:?}",
+        jit_of_grad_test_fn(&eval_trace, &x_for_eval)
+    );
 }
 
 #[test]
