@@ -1,12 +1,6 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-// Represents a traced value. Wrapper for a float.
-trait Tracer {
-    fn add(&self, rhs: &Self) -> Self;
-    fn mul(&self, rhs: &Self) -> Self;
-}
-
 #[derive(Debug, Clone)]
 enum Primitive {
     Mul,
@@ -17,7 +11,7 @@ enum Primitive {
 // Represents a trace.
 // Contains factory methods for creating tracers.
 trait Trace {
-    type Value: Tracer + Clone;
+    type Value: Clone;
     fn primitive(&self, prim: Primitive, inputs: &[&Self::Value]) -> Self::Value;
 
     fn add(&self, lhs: &Self::Value, rhs: &Self::Value) -> Self::Value {
@@ -28,16 +22,6 @@ trait Trace {
     }
     fn constant(&self, value: f32) -> Self::Value {
         self.primitive(Primitive::Constant(value), &[])
-    }
-}
-
-impl Tracer for f32 {
-    fn add(&self, rhs: &Self) -> Self {
-        self + rhs
-    }
-
-    fn mul(&self, rhs: &Self) -> Self {
-        self * rhs
     }
 }
 
@@ -57,28 +41,14 @@ impl Trace for EvalTrace {
 }
 
 #[derive(Debug, Clone)]
-struct GradTracer<T: Tracer> {
+struct GradTracer<T> {
     value: T,
     grad: T,
 }
 
-impl<T: Tracer> GradTracer<T> {
+impl<T> GradTracer<T> {
     fn new(value: T, grad: T) -> Self {
         Self { value, grad }
-    }
-}
-
-impl<T: Tracer> Tracer for GradTracer<T> {
-    fn add(&self, rhs: &Self) -> Self {
-        let value = self.value.add(&rhs.value);
-        let grad = self.grad.add(&rhs.grad);
-        Self::new(value, grad)
-    }
-
-    fn mul(&self, rhs: &Self) -> Self {
-        let value = self.value.mul(&rhs.value);
-        let grad = self.value.mul(&rhs.grad).add(&self.grad.mul(&rhs.value));
-        Self::new(value, grad)
     }
 }
 
@@ -141,16 +111,6 @@ struct ExprTracer {
     value: TracedArgument,
 }
 
-impl Tracer for ExprTracer {
-    fn add(&self, rhs: &Self) -> Self {
-        self.trace.add(self, rhs)
-    }
-
-    fn mul(&self, rhs: &Self) -> Self {
-        self.trace.mul(self, rhs)
-    }
-}
-
 #[derive(Debug, Clone)]
 enum TracedArgument {
     Local(usize),
@@ -160,7 +120,7 @@ enum TracedArgument {
 #[derive(Debug, Clone)]
 struct TracedBlock {
     program: Vec<(Primitive, Vec<TracedArgument>)>,
-    outputs: Vec<TracedArgument>,
+    output: TracedArgument,
     inputs: usize,
 }
 
@@ -168,7 +128,7 @@ impl TracedBlock {
     fn new(inputs: usize) -> Self {
         Self {
             program: Vec::new(),
-            outputs: Vec::new(),
+            output: TracedArgument::Input(0),
             inputs,
         }
     }
@@ -200,7 +160,6 @@ impl Trace for ExprTrace {
         let mut expr_inputs = Vec::new();
         for i in inputs {
             expr_inputs.push(i.value.clone());
-
         }
         let index = self.add_to_program(prim, expr_inputs);
         ExprTracer {
@@ -226,9 +185,9 @@ impl Trace for ExprTrace {
 // }
 
 fn test_fn<T: Trace>(trace: &T, value: &T::Value) -> T::Value {
-    let x_2 = value.mul(value);
-    let x_times_4 = trace.constant(4.0).mul(value);
-    x_2.add(&x_times_4).add(&trace.constant(6.0))
+    let x_2 = trace.mul(value, value);
+    let x_times_4 = trace.mul(&trace.constant(4.0), value);
+    trace.add(&trace.add(&x_2, &x_times_4), &trace.constant(6.0))
 }
 
 fn main() {
