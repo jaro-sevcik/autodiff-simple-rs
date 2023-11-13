@@ -259,6 +259,7 @@ fn eval_poly() {
     let x = 3.0;
     assert_eq!(test_fn(&EvalTrace {}, &x), 27.0);
 }
+
 #[test]
 fn eval_grad_poly() {
     let x = 3.0;
@@ -271,4 +272,18 @@ fn eval_grad_grad_poly() {
     let x = 3.0;
     let grad2_test_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(test_fn));
     assert_eq!(grad2_test_fn(&EvalTrace {}, &x), 2.0);
+}
+
+#[test]
+fn eval_jit_grad_poly() {
+    let x = 3.0;
+    let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_fn));
+    assert_eq!(jit_of_grad_test_fn(&EvalTrace {}, &x), 10.0);
+}
+
+#[test]
+fn eval_jit_poly() {
+    let x = 3.0;
+    let jit_test_fn = jit::<EvalTrace, _>(test_fn);
+    assert_eq!(jit_test_fn(&EvalTrace {}, &x), 27.0);
 }
