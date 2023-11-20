@@ -38,18 +38,20 @@ Here are some goals that we might but likely won't tackle:
 * Simple f32 tracer interface.
 * Simple eval tracing.
 * Simple grad tracing.
-* Composable grad tracing (WIP).
+* Composable grad tracing.
   * Generic grad tracer (tracer of a tracer).
   * Composable wrapper for grad.
 * Simple tracing into expressions.
-  * Composing grad with expression tracing (not sure how, yet, really).
+  * Composing grad with expression tracing.
+* Backward gradient.
 
 **TODO**
 * Simple tracing into expressions.
   * Caching for compiled expressions.
-* Backward gradient.
-* Vectors.
+* Multiple inputs.
+* Non-grad parameters.
 * Tensors.
+* Refactor into modules.
 * Flattening (likely inspired by something like serde).
 * Compile expressions to XLA.
 * Neural net example.
