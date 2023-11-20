@@ -64,7 +64,6 @@ impl Trace for EvalTrace {
             Primitive::Add => inputs[0] + inputs[1],
             Primitive::Mul => inputs[0] * inputs[1],
             Primitive::Block(b) => {
-                println!("Evaluating block {:?}", b);
                 evaluate_block(self, b, inputs)
             }
         }
@@ -191,7 +190,7 @@ impl<Inner: Trace> GradTrace<Inner> {
         LinearGraph::<Inner::Tracer>::constant(value)
     }
 
-    fn evaluate_graph(&self) -> Inner::Tracer {
+    fn evaluate_graph(&self) -> Vec<Inner::Tracer> {
         let graph = self.linear_grad_graph.borrow();
         let mut context = LinearExpressionEvaluationContext::<Inner>::new(
             1,
@@ -213,7 +212,7 @@ impl<Inner: Trace> GradTrace<Inner> {
                 }
             }
         }
-        context.inputs[0].clone()
+        context.inputs
     }
 }
 
@@ -249,15 +248,20 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
     }
 }
 
-fn grad<T: Trace + Clone, GF>(fun: GF) -> impl Fn(&T, &T::Tracer) -> T::Tracer
+fn grad<T: Trace + Clone, GF>(fun: GF) -> impl Fn(&T, &[T::Tracer]) -> Vec<T::Tracer>
 where
-    GF: Fn(&GradTrace<T>, &<GradTrace<T> as Trace>::Tracer) -> <GradTrace<T> as Trace>::Tracer,
+    GF: Fn(&GradTrace<T>, &[<GradTrace<T> as Trace>::Tracer]) -> Vec<<GradTrace<T> as Trace>::Tracer>,
 {
-    move |trace, value| {
+    move |trace, values| {
         let grad_trace = GradTrace::new(trace.clone());
-        let value_for_grad =
-            GradTracer::<T::Tracer>::new(value.clone(), LinearExpressionValue::Input(0));
-        fun(&grad_trace, &value_for_grad); // TODO: We should perhaps use the result to evaluate.
+        let mut parameter_tracers = Vec::new();
+        for v in values {
+            let tracer = GradTracer::<T::Tracer>::new(v.clone(), LinearExpressionValue::Input(parameter_tracers.len()));
+            parameter_tracers.push(tracer);
+        }
+        let result = fun(&grad_trace, &parameter_tracers);
+         // TODO: We should perhaps use the result to evaluate.
+        assert_eq!(result.len(), 1);
         grad_trace.evaluate_graph()
     }
 }
@@ -324,16 +328,23 @@ impl Trace for ExprTrace {
     }
 }
 
-fn jit<T: Trace + Clone, GF>(fun: GF) -> impl Fn(&T, &T::Tracer) -> T::Tracer
+fn jit<T: Trace + Clone, GF>(fun: GF) -> impl Fn(&T, &[T::Tracer]) -> Vec<T::Tracer>
 where
-    GF: Fn(&ExprTrace, &<ExprTrace as Trace>::Tracer) -> <ExprTrace as Trace>::Tracer,
+    GF: Fn(&ExprTrace, &[<ExprTrace as Trace>::Tracer]) -> Vec<<ExprTrace as Trace>::Tracer>,
 {
-    move |in_trace, value| {
+    move |in_trace, values| {
         let expr_trace = ExprTrace::new(1);
-        let param_tracer = ExprTracer {
-            value: TracedArgument::Input(0),
-        };
-        let output = fun(&expr_trace, &param_tracer).value;
+        let mut parameter_tracers = Vec::new();
+        let mut value_refs = Vec::new();
+        for v in values {
+            let param_tracer = ExprTracer {
+                value: TracedArgument::Input(parameter_tracers.len()),
+            };
+            parameter_tracers.push(param_tracer);
+            value_refs.push(v);
+        }
+        // TODO this should support multiple outputs.
+        let output = fun(&expr_trace, &parameter_tracers)[0].value.clone();
 
         let primitive = Primitive::Block(TracedBlock {
             inputs: 1,
@@ -341,14 +352,16 @@ where
             output,
         });
 
-        in_trace.primitive(&primitive, &[value])
+        // TODO this should support multiple outputs.
+        vec![in_trace.primitive(&primitive, &value_refs)]
     }
 }
 
-fn test_fn<T: Trace>(trace: &T, value: &T::Tracer) -> T::Tracer {
+fn test_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
+    let value = &values[0];
     let x_2 = trace.mul(value, value);
     let x_times_4 = trace.mul(&trace.constant(4.0), value);
-    trace.add(&trace.add(&x_2, &x_times_4), &trace.constant(6.0))
+    vec![trace.add(&trace.add(&x_2, &x_times_4), &trace.constant(6.0))]
 }
 
 fn main() {
@@ -357,64 +370,64 @@ fn main() {
     let eval_trace = EvalTrace {};
     println!(
         "Result of x^2+4x+6 at 3: {0:?}",
-        test_fn(&eval_trace, &x_for_eval)
+        test_fn(&eval_trace, &[x_for_eval])
     );
 
     let grad_test_fn = grad::<EvalTrace, _>(test_fn);
 
     println!(
         "Gradient of x^2+4x+6 at 3: {0:?}",
-        grad_test_fn(&eval_trace, &x_for_eval)
+        grad_test_fn(&eval_trace, &[x_for_eval])
     );
 
     let grad2_test_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(test_fn));
     println!(
         "Second gradient of x^2+4x+6 at 3: {0:?}",
-        grad2_test_fn(&eval_trace, &x_for_eval)
+        grad2_test_fn(&eval_trace, &[x_for_eval])
     );
 
     let jit_test_fn = jit::<EvalTrace, _>(test_fn);
     println!(
         "Jit of x^2+4x+6 at 3: {0:?}",
-        jit_test_fn(&eval_trace, &x_for_eval)
+        jit_test_fn(&eval_trace, &[x_for_eval])
     );
     let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_fn));
     println!(
         "Jit of grad of x^2+4x+6 at 3: {0:?}",
-        jit_of_grad_test_fn(&eval_trace, &x_for_eval)
+        jit_of_grad_test_fn(&eval_trace, &[x_for_eval])
     );
 }
 
 #[test]
 fn eval_poly() {
     let x = 3.0;
-    assert_eq!(test_fn(&EvalTrace {}, &x), 27.0);
+    assert_eq!(test_fn(&EvalTrace {}, &[x]), [27.0]);
 }
 
 #[test]
 fn eval_grad_poly() {
     let x = 3.0;
     let grad_test_fn = grad::<EvalTrace, _>(test_fn);
-    assert_eq!(grad_test_fn(&EvalTrace {}, &x), 10.0);
+    assert_eq!(grad_test_fn(&EvalTrace {}, &[x]), [10.0]);
 }
 
 #[test]
 fn eval_grad_grad_poly() {
     let x = 3.0;
     let grad2_test_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(test_fn));
-    assert_eq!(grad2_test_fn(&EvalTrace {}, &x), 2.0);
+    assert_eq!(grad2_test_fn(&EvalTrace {}, &[x]), [2.0]);
 }
 
 #[test]
 fn eval_jit_grad_poly() {
     let x = 3.0;
     let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_fn));
-    assert_eq!(jit_of_grad_test_fn(&EvalTrace {}, &x), 10.0);
+    assert_eq!(jit_of_grad_test_fn(&EvalTrace {}, &[x]), [10.0]);
 }
 
 #[test]
 fn eval_jit_poly() {
     let x = 3.0;
     let jit_test_fn = jit::<EvalTrace, _>(test_fn);
-    assert_eq!(jit_test_fn(&EvalTrace {}, &x), 27.0);
+    assert_eq!(jit_test_fn(&EvalTrace {}, &[x]), [27.0]);
 }
