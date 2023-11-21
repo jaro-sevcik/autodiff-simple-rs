@@ -6,10 +6,10 @@ mod trace;
 #[cfg(test)]
 mod tests;
 
-use eval_trace::*;
-use expr_trace::*;
-use grad::*;
-use trace::*;
+use eval_trace::EvalTrace;
+use expr_trace::{jit, ExprTrace};
+use grad::{grad, GradTrace};
+use trace::Trace;
 
 fn test_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
     let value = &values[0];

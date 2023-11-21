@@ -1,7 +1,7 @@
-use crate::eval_trace::*;
-use crate::expr_trace::*;
-use crate::grad::*;
-use crate::trace::*;
+use crate::eval_trace::EvalTrace;
+use crate::expr_trace::{jit, ExprTrace};
+use crate::grad::{grad, GradTrace};
+use crate::trace::Trace;
 
 fn poly_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
     let value = &values[0];

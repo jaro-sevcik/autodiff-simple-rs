@@ -46,13 +46,13 @@ Here are some goals that we might but likely won't tackle:
 * Backward gradient.
 * Multiple inputs.
 * Multiple outputs.
+* Refactor into modules.
 
 **TODO**
 * Simple tracing into expressions.
   * Caching for compiled expressions.
 * Non-grad parameters.
 * Tensors.
-* Refactor into modules.
 * Flattening (likely inspired by something like serde).
 * Compile expressions to XLA.
 * Neural net example.
