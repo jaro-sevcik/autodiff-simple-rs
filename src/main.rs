@@ -27,14 +27,14 @@ fn main() {
         test_fn(&eval_trace, &[x_for_eval])
     );
 
-    let grad_test_fn = grad::<EvalTrace, _>(test_fn);
+    let grad_test_fn = grad::<EvalTrace, _>(test_fn, 1);
 
     println!(
         "Gradient of x^2+4x+6 at 3: {0:?}",
         grad_test_fn(&eval_trace, &[x_for_eval])
     );
 
-    let grad2_test_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(test_fn));
+    let grad2_test_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(test_fn, 1), 1);
     println!(
         "Second gradient of x^2+4x+6 at 3: {0:?}",
         grad2_test_fn(&eval_trace, &[x_for_eval])
@@ -45,7 +45,7 @@ fn main() {
         "Jit of x^2+4x+6 at 3: {0:?}",
         jit_test_fn(&eval_trace, &[x_for_eval])
     );
-    let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_fn));
+    let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_fn, 1));
     println!(
         "Jit of grad of x^2+4x+6 at 3: {0:?}",
         jit_of_grad_test_fn(&eval_trace, &[x_for_eval])

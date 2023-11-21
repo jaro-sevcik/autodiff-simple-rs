@@ -19,14 +19,14 @@ fn eval_poly() {
 #[test]
 fn eval_grad_poly() {
     let x = 3.0;
-    let grad_poly_fn = grad::<EvalTrace, _>(poly_fn);
+    let grad_poly_fn = grad::<EvalTrace, _>(poly_fn, 1);
     assert_eq!(grad_poly_fn(&EvalTrace {}, &[x]), [8.0]);
 }
 
 #[test]
 fn eval_grad_grad_poly() {
     let x = 3.0;
-    let grad2_poly_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(poly_fn));
+    let grad2_poly_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(poly_fn, 1), 1);
     assert_eq!(grad2_poly_fn(&EvalTrace {}, &[x]), [2.0]);
 }
 
@@ -40,7 +40,7 @@ fn eval_jit_poly() {
 #[test]
 fn eval_jit_grad_poly() {
     let x = 3.0;
-    let jit_of_grad_poly_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(poly_fn));
+    let jit_of_grad_poly_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(poly_fn, 1));
     assert_eq!(jit_of_grad_poly_fn(&EvalTrace {}, &[x]), [8.0]);
 }
 
@@ -52,15 +52,23 @@ fn test_multivar_mul_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tra
 fn eval_grad_multivar_mul() {
     let x = 3.0;
     let y = 4.0;
-    let grad_test_fn = grad::<EvalTrace, _>(test_multivar_mul_fn);
+    let grad_test_fn = grad::<EvalTrace, _>(test_multivar_mul_fn, 2);
     assert_eq!(grad_test_fn(&EvalTrace {}, &[x, y]), [4.0, 3.0]);
+}
+
+#[test]
+fn eval_partial_grad_multivar_mul() {
+    let x = 3.0;
+    let y = 4.0;
+    let grad_test_fn = grad::<EvalTrace, _>(test_multivar_mul_fn, 1);
+    assert_eq!(grad_test_fn(&EvalTrace {}, &[x, y]), [4.0]);
 }
 
 #[test]
 fn eval_jit_grad_multivar_mul() {
     let x = 3.0;
     let y = 4.0;
-    let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_multivar_mul_fn));
+    let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_multivar_mul_fn, 2));
     assert_eq!(jit_of_grad_test_fn(&EvalTrace {}, &[x, y]), [4.0, 3.0]);
 }
 

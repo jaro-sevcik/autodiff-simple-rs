@@ -181,7 +181,10 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
     }
 }
 
-pub fn grad<T: Trace + Clone, GF>(fun: GF) -> impl Fn(&T, &[T::Tracer]) -> Vec<T::Tracer>
+pub fn grad<T: Trace + Clone, GF>(
+    fun: GF,
+    grad_input_count: usize,
+) -> impl Fn(&T, &[T::Tracer]) -> Vec<T::Tracer>
 where
     GF: Fn(
         &GradTrace<T>,
@@ -190,17 +193,20 @@ where
 {
     move |trace, values| {
         let grad_trace = GradTrace::new(trace.clone());
-        let mut parameter_tracers = Vec::new();
-        for v in values {
-            let tracer = GradTracer::<T::Tracer>::new(
-                v.clone(),
-                LinearExpressionValue::Input(parameter_tracers.len()),
-            );
-            parameter_tracers.push(tracer);
-        }
+        let zero = trace.constant(0.0);
+        let parameter_tracers: Vec<GradTracer<T::Tracer>> = (0..values.len())
+            .map(|i| {
+                let grad = if i < grad_input_count {
+                    LinearExpressionValue::Input(i)
+                } else {
+                    LinearExpressionValue::Constant(zero.clone())
+                };
+                GradTracer::<T::Tracer>::new(values[i].clone(), grad)
+            })
+            .collect();
         let result = fun(&grad_trace, &parameter_tracers);
-        // TODO: We should perhaps use the result to evaluate.
+        // TODO: We should perhaps use the result to evaluate the graph.
         assert_eq!(result.len(), 1);
-        grad_trace.evaluate_graph(values.len())
+        grad_trace.evaluate_graph(usize::min(values.len(), grad_input_count))
     }
 }
