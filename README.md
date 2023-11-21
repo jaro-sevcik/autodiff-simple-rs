@@ -47,12 +47,21 @@ Here are some goals that we might but likely won't tackle:
 * Multiple inputs.
 * Multiple outputs.
 * Refactor into modules.
+* Non-grad parameters.
 
 **TODO**
 * Simple tracing into expressions.
   * Caching for compiled expressions.
-* Non-grad parameters.
 * Tensors.
+  * Types: i32, f32
+  * Ops:
+    * Matmul (with grad).
+    * Addition  (with grad).
+    * tanh  (with grad).
+    * Broadcast (with grad).
+    * Logsumexp (with grad).
+    * Reshape (with grad).
+    * Indexing (with only the index grad).
 * Flattening (likely inspired by something like serde).
 * Compile expressions to XLA.
 * Neural net example.
