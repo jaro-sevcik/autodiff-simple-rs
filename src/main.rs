@@ -7,21 +7,22 @@ enum Primitive {
     Add,
     Constant(f32),
     Block(TracedBlock),
+    Projection(usize),
 }
 
 // Represents the state captured during tracing.
 trait Trace {
     type Tracer: Clone;
-    fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Self::Tracer;
+    fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Vec<Self::Tracer>;
 
     fn add(&self, lhs: &Self::Tracer, rhs: &Self::Tracer) -> Self::Tracer {
-        self.primitive(&Primitive::Add, &[lhs, rhs])
+        self.primitive(&Primitive::Add, &[lhs, rhs])[0].clone()
     }
     fn mul(&self, lhs: &Self::Tracer, rhs: &Self::Tracer) -> Self::Tracer {
-        self.primitive(&Primitive::Mul, &[lhs, rhs])
+        self.primitive(&Primitive::Mul, &[lhs, rhs])[0].clone()
     }
     fn constant(&self, value: f32) -> Self::Tracer {
-        self.primitive(&Primitive::Constant(value), &[])
+        self.primitive(&Primitive::Constant(value), &[])[0].clone()
     }
 }
 
@@ -31,16 +32,27 @@ trait Trace {
 struct EvalTrace {}
 
 // Helper for evaluating a jitted block.
-fn evaluate_block<T: Trace>(trace: &T, b: &TracedBlock, inputs: &[&T::Tracer]) -> T::Tracer {
+fn evaluate_block<T: Trace>(trace: &T, b: &TracedBlock, inputs: &[&T::Tracer]) -> Vec<T::Tracer> {
     assert_eq!(b.inputs, inputs.len());
-    let mut locals = Vec::<T::Tracer>::new();
+    let mut locals = Vec::<Vec<T::Tracer>>::new();
     for (prim, args) in &b.program {
         // Resolve the arguments.
         let mut arg_values = Vec::new();
+
+        // Handle the projection specially.
+        if let Primitive::Projection(i) = prim {
+            assert_eq!(args.len(), 1);
+            if let TracedBlockVar::Local(local) = args[0] {
+                return vec![locals[local][*i].clone()];
+            } else {
+                panic!("Invalid projection from function input.")
+            }
+        }
+
         for a in args {
             let arg = match a {
-                TracedArgument::Input(i) => inputs[*i],
-                TracedArgument::Local(i) => &locals[*i],
+                TracedBlockVar::Input(i) => inputs[*i],
+                TracedBlockVar::Local(i) => &locals[*i][0],
             };
             arg_values.push(arg)
         }
@@ -49,23 +61,25 @@ fn evaluate_block<T: Trace>(trace: &T, b: &TracedBlock, inputs: &[&T::Tracer]) -
         locals.push(trace.primitive(prim, &arg_values));
     }
     // Extract the output.
-    match b.output {
-        TracedArgument::Input(i) => inputs[i].clone(),
-        TracedArgument::Local(i) => locals[i].clone(),
-    }
+    b.outputs
+        .iter()
+        .map(|o| match o {
+            TracedBlockVar::Input(i) => inputs[*i].clone(),
+            TracedBlockVar::Local(i) => locals[*i][0].clone(),
+        })
+        .collect()
 }
 
 impl Trace for EvalTrace {
     type Tracer = f32;
 
-    fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Self::Tracer {
+    fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Vec<Self::Tracer> {
         match prim {
-            Primitive::Constant(c) => *c,
-            Primitive::Add => inputs[0] + inputs[1],
-            Primitive::Mul => inputs[0] * inputs[1],
-            Primitive::Block(b) => {
-                evaluate_block(self, b, inputs)
-            }
+            Primitive::Constant(c) => vec![*c],
+            Primitive::Add => vec![inputs[0] + inputs[1]],
+            Primitive::Mul => vec![inputs[0] * inputs[1]],
+            Primitive::Block(b) => evaluate_block(self, b, inputs),
+            Primitive::Projection(i) => vec![inputs[*i].clone()],
         }
     }
 }
@@ -190,10 +204,10 @@ impl<Inner: Trace> GradTrace<Inner> {
         LinearGraph::<Inner::Tracer>::constant(value)
     }
 
-    fn evaluate_graph(&self) -> Vec<Inner::Tracer> {
+    fn evaluate_graph(&self, input_count: usize) -> Vec<Inner::Tracer> {
         let graph = self.linear_grad_graph.borrow();
         let mut context = LinearExpressionEvaluationContext::<Inner>::new(
-            1,
+            input_count,
             graph.expressions.len(),
             &self.inner,
         );
@@ -219,20 +233,20 @@ impl<Inner: Trace> GradTrace<Inner> {
 impl<Inner: Trace> Trace for GradTrace<Inner> {
     type Tracer = GradTracer<Inner::Tracer>;
 
-    fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Self::Tracer {
+    fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Vec<Self::Tracer> {
         match prim {
             Primitive::Constant(c) => {
                 assert_eq!(inputs.len(), 0);
-                Self::Tracer::new(
+                vec![Self::Tracer::new(
                     self.inner.constant(*c),
                     self.linear_const(self.inner.constant(0.0)),
-                )
+                )]
             }
             Primitive::Add => {
                 assert_eq!(inputs.len(), 2);
                 let value = self.inner.add(&inputs[0].value, &inputs[1].value);
                 let grad_value = self.linear_add(inputs[0].grad.clone(), inputs[1].grad.clone());
-                Self::Tracer::new(value, grad_value)
+                vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::Mul => {
                 assert_eq!(inputs.len(), 2);
@@ -241,46 +255,53 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
                     self.linear_mul(inputs[0].grad.clone(), inputs[1].value.clone()),
                     self.linear_mul(inputs[1].grad.clone(), inputs[0].value.clone()),
                 );
-                Self::Tracer::new(value, grad_value)
+                vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::Block(b) => evaluate_block(self, b, inputs),
+            Primitive::Projection(i) => vec![inputs[*i].clone()],
         }
     }
 }
 
 fn grad<T: Trace + Clone, GF>(fun: GF) -> impl Fn(&T, &[T::Tracer]) -> Vec<T::Tracer>
 where
-    GF: Fn(&GradTrace<T>, &[<GradTrace<T> as Trace>::Tracer]) -> Vec<<GradTrace<T> as Trace>::Tracer>,
+    GF: Fn(
+        &GradTrace<T>,
+        &[<GradTrace<T> as Trace>::Tracer],
+    ) -> Vec<<GradTrace<T> as Trace>::Tracer>,
 {
     move |trace, values| {
         let grad_trace = GradTrace::new(trace.clone());
         let mut parameter_tracers = Vec::new();
         for v in values {
-            let tracer = GradTracer::<T::Tracer>::new(v.clone(), LinearExpressionValue::Input(parameter_tracers.len()));
+            let tracer = GradTracer::<T::Tracer>::new(
+                v.clone(),
+                LinearExpressionValue::Input(parameter_tracers.len()),
+            );
             parameter_tracers.push(tracer);
         }
         let result = fun(&grad_trace, &parameter_tracers);
-         // TODO: We should perhaps use the result to evaluate.
+        // TODO: We should perhaps use the result to evaluate.
         assert_eq!(result.len(), 1);
-        grad_trace.evaluate_graph()
+        grad_trace.evaluate_graph(values.len())
     }
 }
 
 #[derive(Debug, Clone)]
 struct ExprTracer {
-    value: TracedArgument,
+    variable: TracedBlockVar,
 }
 
 #[derive(Debug, Clone)]
-enum TracedArgument {
+enum TracedBlockVar {
     Local(usize),
     Input(usize),
 }
 
 #[derive(Debug, Clone)]
 struct TracedBlock {
-    program: Vec<(Primitive, Vec<TracedArgument>)>,
-    output: TracedArgument,
+    program: Vec<(Primitive, Vec<TracedBlockVar>)>,
+    outputs: Vec<TracedBlockVar>,
     inputs: usize,
 }
 
@@ -288,7 +309,7 @@ impl TracedBlock {
     fn new(inputs: usize) -> Self {
         Self {
             program: Vec::new(),
-            output: TracedArgument::Input(0),
+            outputs: Vec::new(),
             inputs,
         }
     }
@@ -306,7 +327,7 @@ impl ExprTrace {
         }
     }
 
-    fn add_to_program(&self, prim: Primitive, inputs: Vec<TracedArgument>) -> usize {
+    fn add_to_program(&self, prim: Primitive, inputs: Vec<TracedBlockVar>) -> usize {
         let mut block = self.block.borrow_mut();
         block.program.push((prim, inputs));
         block.program.len() - 1
@@ -316,15 +337,15 @@ impl ExprTrace {
 impl Trace for ExprTrace {
     type Tracer = ExprTracer;
 
-    fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Self::Tracer {
+    fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Vec<Self::Tracer> {
         let mut expr_inputs = Vec::new();
         for i in inputs {
-            expr_inputs.push(i.value.clone());
+            expr_inputs.push(i.variable.clone());
         }
         let index = self.add_to_program(prim.clone(), expr_inputs);
-        ExprTracer {
-            value: TracedArgument::Local(index),
-        }
+        vec![ExprTracer {
+            variable: TracedBlockVar::Local(index),
+        }]
     }
 }
 
@@ -334,26 +355,26 @@ where
 {
     move |in_trace, values| {
         let expr_trace = ExprTrace::new(1);
-        let mut parameter_tracers = Vec::new();
-        let mut value_refs = Vec::new();
-        for v in values {
-            let param_tracer = ExprTracer {
-                value: TracedArgument::Input(parameter_tracers.len()),
-            };
-            parameter_tracers.push(param_tracer);
-            value_refs.push(v);
-        }
-        // TODO this should support multiple outputs.
-        let output = fun(&expr_trace, &parameter_tracers)[0].value.clone();
+        // Prepare the arguments as expression tracers.
+        let parameter_tracers: Vec<ExprTracer> = (0..values.len())
+            .map(|i| ExprTracer {
+                variable: TracedBlockVar::Input(i),
+            })
+            .collect();
+        // Compute the expression with the expression trace.
+        let result: Vec<ExprTracer> = fun(&expr_trace, &parameter_tracers);
+        // Extract the outputs.
+        let outputs = result.iter().map(|r| r.variable.clone()).collect();
 
+        // Pass the compiled expression to the underlying trace
+        // as a "TracedBlock" primitive.
         let primitive = Primitive::Block(TracedBlock {
-            inputs: 1,
+            inputs: values.len(),
             program: expr_trace.block.borrow().program.clone(),
-            output,
+            outputs,
         });
-
-        // TODO this should support multiple outputs.
-        vec![in_trace.primitive(&primitive, &value_refs)]
+        let value_refs: Vec<&T::Tracer> = values.iter().collect();
+        in_trace.primitive(&primitive, &value_refs)
     }
 }
 
@@ -398,36 +419,65 @@ fn main() {
     );
 }
 
+#[cfg(test)]
+fn poly_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
+    let value = &values[0];
+    let x_2 = trace.mul(value, value);
+    let x_times_2 = trace.mul(&trace.constant(2.0), value);
+    vec![trace.add(&trace.add(&x_2, &x_times_2), &trace.constant(-3.0))]
+}
+
 #[test]
 fn eval_poly() {
     let x = 3.0;
-    assert_eq!(test_fn(&EvalTrace {}, &[x]), [27.0]);
+    assert_eq!(poly_fn(&EvalTrace {}, &[x]), [12.0]);
 }
 
 #[test]
 fn eval_grad_poly() {
     let x = 3.0;
-    let grad_test_fn = grad::<EvalTrace, _>(test_fn);
-    assert_eq!(grad_test_fn(&EvalTrace {}, &[x]), [10.0]);
+    let grad_poly_fn = grad::<EvalTrace, _>(poly_fn);
+    assert_eq!(grad_poly_fn(&EvalTrace {}, &[x]), [8.0]);
 }
 
 #[test]
 fn eval_grad_grad_poly() {
     let x = 3.0;
-    let grad2_test_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(test_fn));
-    assert_eq!(grad2_test_fn(&EvalTrace {}, &[x]), [2.0]);
+    let grad2_poly_fn = grad::<EvalTrace, _>(grad::<GradTrace<EvalTrace>, _>(poly_fn));
+    assert_eq!(grad2_poly_fn(&EvalTrace {}, &[x]), [2.0]);
 }
 
 #[test]
 fn eval_jit_grad_poly() {
     let x = 3.0;
-    let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_fn));
-    assert_eq!(jit_of_grad_test_fn(&EvalTrace {}, &[x]), [10.0]);
+    let jit_of_grad_poly_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(poly_fn));
+    assert_eq!(jit_of_grad_poly_fn(&EvalTrace {}, &[x]), [8.0]);
 }
 
 #[test]
 fn eval_jit_poly() {
     let x = 3.0;
-    let jit_test_fn = jit::<EvalTrace, _>(test_fn);
-    assert_eq!(jit_test_fn(&EvalTrace {}, &[x]), [27.0]);
+    let jit_poly_fn = jit::<EvalTrace, _>(poly_fn);
+    assert_eq!(jit_poly_fn(&EvalTrace {}, &[x]), [12.0]);
+}
+
+#[cfg(test)]
+fn test_multivar_mul_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
+    vec![trace.mul(&values[0], &values[1])]
+}
+
+#[test]
+fn eval_grad_multivar_mul() {
+    let x = 3.0;
+    let y = 4.0;
+    let grad_test_fn = grad::<EvalTrace, _>(test_multivar_mul_fn);
+    assert_eq!(grad_test_fn(&EvalTrace {}, &[x, y]), [4.0, 3.0]);
+}
+
+#[test]
+fn eval_jit_grad_multivar_mul() {
+    let x = 3.0;
+    let y = 4.0;
+    let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_multivar_mul_fn));
+    assert_eq!(jit_of_grad_test_fn(&EvalTrace {}, &[x, y]), [4.0, 3.0]);
 }
