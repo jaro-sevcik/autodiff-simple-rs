@@ -499,6 +499,12 @@ fn test_embed_jit_fn<T: Trace + Clone>(trace: &T, values: &[T::Tracer]) -> Vec<T
 }
 
 #[test]
+fn eval_with_jit_grad_multivar_mul() {
+    let x = 3.0;
+    assert_eq!(test_embed_jit_fn(&EvalTrace {}, &[x]), [36.0]);
+}
+
+#[test]
 fn composed_jit_grad_multivar_mul() {
     let x = 3.0;
     let jit_composed_fn = jit::<EvalTrace, _>(test_embed_jit_fn);

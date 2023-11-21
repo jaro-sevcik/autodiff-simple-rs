@@ -44,11 +44,12 @@ Here are some goals that we might but likely won't tackle:
 * Simple tracing into expressions.
   * Composing grad with expression tracing.
 * Backward gradient.
+* Multiple inputs.
+* Multiple outputs.
 
 **TODO**
 * Simple tracing into expressions.
   * Caching for compiled expressions.
-* Multiple inputs.
 * Non-grad parameters.
 * Tensors.
 * Refactor into modules.
