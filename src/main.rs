@@ -7,7 +7,15 @@ enum Primitive {
     Add,
     Constant(f32),
     Block(TracedBlock),
-    Projection(usize),
+}
+
+impl Primitive {
+    fn output_count(&self) -> usize {
+        match self {
+            Primitive::Block(b) => b.outputs.len(),
+            _ => 1,
+        }
+    }
 }
 
 // Represents the state captured during tracing.
@@ -39,20 +47,10 @@ fn evaluate_block<T: Trace>(trace: &T, b: &TracedBlock, inputs: &[&T::Tracer]) -
         // Resolve the arguments.
         let mut arg_values = Vec::new();
 
-        // Handle the projection specially.
-        if let Primitive::Projection(i) = prim {
-            assert_eq!(args.len(), 1);
-            if let TracedBlockVar::Local(local) = args[0] {
-                return vec![locals[local][*i].clone()];
-            } else {
-                panic!("Invalid projection from function input.")
-            }
-        }
-
         for a in args {
             let arg = match a {
                 TracedBlockVar::Input(i) => inputs[*i],
-                TracedBlockVar::Local(i) => &locals[*i][0],
+                TracedBlockVar::Local(equation, output) => &locals[*equation][*output],
             };
             arg_values.push(arg)
         }
@@ -65,7 +63,7 @@ fn evaluate_block<T: Trace>(trace: &T, b: &TracedBlock, inputs: &[&T::Tracer]) -
         .iter()
         .map(|o| match o {
             TracedBlockVar::Input(i) => inputs[*i].clone(),
-            TracedBlockVar::Local(i) => locals[*i][0].clone(),
+            TracedBlockVar::Local(equation, output) => locals[*equation][*output].clone(),
         })
         .collect()
 }
@@ -79,7 +77,6 @@ impl Trace for EvalTrace {
             Primitive::Add => vec![inputs[0] + inputs[1]],
             Primitive::Mul => vec![inputs[0] * inputs[1]],
             Primitive::Block(b) => evaluate_block(self, b, inputs),
-            Primitive::Projection(i) => vec![inputs[*i].clone()],
         }
     }
 }
@@ -258,7 +255,6 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
                 vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::Block(b) => evaluate_block(self, b, inputs),
-            Primitive::Projection(i) => vec![inputs[*i].clone()],
         }
     }
 }
@@ -294,7 +290,8 @@ struct ExprTracer {
 
 #[derive(Debug, Clone)]
 enum TracedBlockVar {
-    Local(usize),
+    // Local is identified by the [equation-index, output-index] pair.
+    Local(usize, usize),
     Input(usize),
 }
 
@@ -343,9 +340,11 @@ impl Trace for ExprTrace {
             expr_inputs.push(i.variable.clone());
         }
         let index = self.add_to_program(prim.clone(), expr_inputs);
-        vec![ExprTracer {
-            variable: TracedBlockVar::Local(index),
-        }]
+        (0..prim.output_count())
+            .map(|output| ExprTracer {
+                variable: TracedBlockVar::Local(index, output),
+            })
+            .collect()
     }
 }
 
@@ -482,26 +481,26 @@ fn eval_jit_grad_multivar_mul() {
     assert_eq!(jit_of_grad_test_fn(&EvalTrace {}, &[x, y]), [4.0, 3.0]);
 }
 
-// #[cfg(test)]
-// fn test_multi_output_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
-//     let x2 = trace.mul(&values[0], &values[0]);
-//     let x3 = trace.mul(&x2, &values[0]);
-//     vec![x2, x3]
-// }
+#[cfg(test)]
+fn test_multi_output_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
+    let x2 = trace.mul(&values[0], &values[0]);
+    let x3 = trace.mul(&x2, &values[0]);
+    vec![x2, x3]
+}
 
-// #[cfg(test)]
-// fn test_embed_jit_fn<T: Trace + Clone>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
-//     let jitted_multi_out = jit::<T, _>(test_multi_output_fn);
+#[cfg(test)]
+fn test_embed_jit_fn<T: Trace + Clone>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
+    let jitted_multi_out = jit::<T, _>(test_multi_output_fn);
 
-//     let res = jitted_multi_out(trace, &[values[0].clone()]);
-//     let sum = trace.add(&res[0], &res[1]);
+    let res = jitted_multi_out(trace, &[values[0].clone()]);
+    let sum = trace.add(&res[0], &res[1]);
 
-//     vec![sum]
-// }
+    vec![sum]
+}
 
-// #[test]
-// fn composed_jit_grad_multivar_mul() {
-//     let x = 3.0;
-//     let jit_composed_fn = jit::<EvalTrace, _>(test_embed_jit_fn);
-//     assert_eq!(jit_composed_fn(&EvalTrace {}, &[x]), [36.0]);
-// }
+#[test]
+fn composed_jit_grad_multivar_mul() {
+    let x = 3.0;
+    let jit_composed_fn = jit::<EvalTrace, _>(test_embed_jit_fn);
+    assert_eq!(jit_composed_fn(&EvalTrace {}, &[x]), [36.0]);
+}
