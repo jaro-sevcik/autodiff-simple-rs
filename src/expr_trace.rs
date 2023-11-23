@@ -1,3 +1,5 @@
+use log::trace;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -63,12 +65,13 @@ where
 
         // Pass the compiled expression to the underlying trace
         // as a "TracedBlock" primitive.
-        let primitive = Primitive::Block(TracedBlock {
+        let block = TracedBlock {
             input_count: values.len(),
             program: expr_trace.block.borrow().program.clone(),
             outputs,
-        });
+        };
+        trace!("Jitted block:\n{:#?}", block);
         let value_refs: Vec<&T::Tracer> = values.iter().collect();
-        in_trace.primitive(&primitive, &value_refs)
+        in_trace.primitive(&Primitive::Block(block), &value_refs)
     }
 }

@@ -65,3 +65,12 @@ Here are some goals that we might but likely won't tackle:
 * Flattening (likely inspired by something like serde).
 * Compile expressions to XLA.
 * Neural net example.
+
+# Development
+
+## Logging
+
+Log all `trace!` invocations from the grad module:
+```
+RUST_LOG=autodiff_simple_rs::grad=trace cargo run
+```

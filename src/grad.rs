@@ -1,10 +1,12 @@
+use log::trace;
 use std::cell::RefCell;
+use std::fmt::Debug;
 use std::rc::Rc;
 
 use crate::trace::*;
 
 // Captured grad trace graph.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct LinearGraph<T> {
     expressions: Vec<LinearExpression<T>>,
 }
@@ -15,23 +17,44 @@ impl<T> LinearGraph<T> {
             expressions: Vec::new(),
         }
     }
+}
 
-    fn constant(value: T) -> LinearExpressionValue<T> {
-        LinearExpressionValue::Constant(value)
+impl<T> Debug for LinearGraph<T>
+where
+    T: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let new_line = if f.alternate() { "\n" } else { "; " };
+        for i in 0..self.expressions.len() {
+            let e = &self.expressions[i];
+            write!(f, "{}%{} <- {:?}", new_line, i, e)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+enum LinearExpressionValue {
+    Input(usize),
+    ExpressionIndex(usize),
+    Zero,
+}
+
+impl Debug for LinearExpressionValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LinearExpressionValue::Zero => write!(f, "zero"),
+            LinearExpressionValue::Input(i) => write!(f, "I{}", i),
+            LinearExpressionValue::ExpressionIndex(i) => write!(f, "%{}", i),
+        }
     }
 }
 
 #[derive(Debug, Clone)]
-enum LinearExpressionValue<T> {
-    Input(usize),
-    ExpressionIndex(usize),
-    Constant(T),
-}
-
-#[derive(Debug, Clone)]
 enum LinearExpression<T> {
-    Mul(LinearExpressionValue<T>, T),
-    Add(LinearExpressionValue<T>, LinearExpressionValue<T>),
+    Mul(LinearExpressionValue, T),
+    Add(LinearExpressionValue, LinearExpressionValue),
 }
 
 struct LinearExpressionEvaluationContext<T: Trace> {
@@ -41,29 +64,19 @@ struct LinearExpressionEvaluationContext<T: Trace> {
 
 impl<T: Trace> LinearExpressionEvaluationContext<T> {
     fn new(inputs: usize, expression_count: usize, trace: &T) -> Self {
-        let mut values = vec![trace.constant(0.0); expression_count];
-        if !values.is_empty() {
-            values[expression_count - 1] = trace.constant(1.0)
-        }
-
         Self {
-            values,
+            values: vec![trace.constant(0.0); expression_count],
             inputs: vec![trace.constant(0.0); inputs],
         }
     }
 
-    fn add_to_value(
-        &mut self,
-        index: &LinearExpressionValue<T::Tracer>,
-        value: &T::Tracer,
-        trace: &T,
-    ) {
+    fn add_to_value(&mut self, index: &LinearExpressionValue, value: &T::Tracer, trace: &T) {
         match index {
             LinearExpressionValue::ExpressionIndex(i) => {
                 self.values[*i] = trace.add(&self.values[*i], value)
             }
             LinearExpressionValue::Input(i) => self.inputs[*i] = trace.add(&self.inputs[*i], value),
-            LinearExpressionValue::Constant(_) => (),
+            LinearExpressionValue::Zero => (),
         }
     }
 }
@@ -71,11 +84,11 @@ impl<T: Trace> LinearExpressionEvaluationContext<T> {
 #[derive(Debug, Clone)]
 pub struct GradTracer<T> {
     value: T,
-    grad: LinearExpressionValue<T>,
+    grad: LinearExpressionValue,
 }
 
 impl<T> GradTracer<T> {
-    fn new(value: T, grad: LinearExpressionValue<T>) -> Self {
+    fn new(value: T, grad: LinearExpressionValue) -> Self {
         Self { value, grad }
     }
 }
@@ -103,33 +116,44 @@ impl<Inner: Trace> GradTrace<Inner> {
 
     fn linear_add(
         &self,
-        lhs: LinearExpressionValue<Inner::Tracer>,
-        rhs: LinearExpressionValue<Inner::Tracer>,
-    ) -> LinearExpressionValue<Inner::Tracer> {
+        lhs: LinearExpressionValue,
+        rhs: LinearExpressionValue,
+    ) -> LinearExpressionValue {
+        if let LinearExpressionValue::Zero = lhs {
+            return rhs;
+        }
+        if let LinearExpressionValue::Zero = rhs {
+            return lhs;
+        }
         let index = self.add_expression(LinearExpression::Add(lhs, rhs));
         LinearExpressionValue::ExpressionIndex(index)
     }
 
-    fn linear_mul(
-        &self,
-        lhs: LinearExpressionValue<Inner::Tracer>,
-        rhs: Inner::Tracer,
-    ) -> LinearExpressionValue<Inner::Tracer> {
+    fn linear_mul(&self, lhs: LinearExpressionValue, rhs: Inner::Tracer) -> LinearExpressionValue {
+        if let LinearExpressionValue::Zero = lhs {
+            return lhs;
+        }
         let index = self.add_expression(LinearExpression::Mul(lhs, rhs));
         LinearExpressionValue::ExpressionIndex(index)
     }
 
-    fn linear_const(&self, value: Inner::Tracer) -> LinearExpressionValue<Inner::Tracer> {
-        LinearGraph::<Inner::Tracer>::constant(value)
+    fn linear_zero(&self) -> LinearExpressionValue {
+        LinearExpressionValue::Zero
     }
 
-    fn evaluate_graph(&self, input_count: usize) -> Vec<Inner::Tracer> {
+    fn evaluate_graph(
+        &self,
+        input_count: usize,
+        result: LinearExpressionValue,
+    ) -> Vec<Inner::Tracer> {
         let graph = self.linear_grad_graph.borrow();
         let mut context = LinearExpressionEvaluationContext::<Inner>::new(
             input_count,
             graph.expressions.len(),
             &self.inner,
         );
+
+        context.add_to_value(&result, &self.inner.constant(1.0), &self.inner);
 
         let mut position = graph.expressions.len();
         for e in graph.expressions.iter().rev() {
@@ -158,7 +182,7 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
                 assert_eq!(inputs.len(), 0);
                 vec![Self::Tracer::new(
                     self.inner.constant(*c),
-                    self.linear_const(self.inner.constant(0.0)),
+                    self.linear_zero(),
                 )]
             }
             Primitive::Add => {
@@ -190,23 +214,29 @@ where
         &GradTrace<T>,
         &[<GradTrace<T> as Trace>::Tracer],
     ) -> Vec<<GradTrace<T> as Trace>::Tracer>,
+    T::Tracer: std::fmt::Debug,
 {
     move |trace, values| {
         let grad_trace = GradTrace::new(trace.clone());
-        let zero = trace.constant(0.0);
         let parameter_tracers: Vec<GradTracer<T::Tracer>> = (0..values.len())
             .map(|i| {
                 let grad = if i < grad_input_count {
                     LinearExpressionValue::Input(i)
                 } else {
-                    LinearExpressionValue::Constant(zero.clone())
+                    LinearExpressionValue::Zero
                 };
                 GradTracer::<T::Tracer>::new(values[i].clone(), grad)
             })
             .collect();
         let result = fun(&grad_trace, &parameter_tracers);
-        // TODO: We should perhaps use the result to evaluate the graph.
+        trace!(
+            "Grad linear graph: {:#?}",
+            grad_trace.linear_grad_graph.borrow()
+        );
         assert_eq!(result.len(), 1);
-        grad_trace.evaluate_graph(usize::min(values.len(), grad_input_count))
+        grad_trace.evaluate_graph(
+            usize::min(values.len(), grad_input_count),
+            result[0].grad.clone(),
+        )
     }
 }

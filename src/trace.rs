@@ -38,7 +38,22 @@ pub enum TracedBlockVar {
     Input(usize),
 }
 
-#[derive(Debug, Clone)]
+impl TracedBlockVar {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Input(i) => format!("I{}", i),
+            Self::Local(i, j) => {
+                if *j == 0 {
+                    format!("%{}", i)
+                } else {
+                    format!("%{}#{}", i, j)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct TracedBlock {
     pub program: Vec<(Primitive, Vec<TracedBlockVar>)>,
     pub outputs: Vec<TracedBlockVar>,
@@ -52,6 +67,20 @@ impl TracedBlock {
             outputs: Vec::new(),
             input_count,
         }
+    }
+}
+
+impl std::fmt::Debug for TracedBlock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_list();
+        d.entry(&ExprInputCountFormatHelper(self.input_count));
+        d.entry(&ExprOutputsFormatHelper(&self.outputs));
+        for i in 0..self.program.len() {
+            let (prim, inputs) = &self.program[i];
+            d.entry(&EquationFormatHelper(i, &prim, &inputs));
+        }
+        d.finish()?;
+        Ok(())
     }
 }
 
@@ -86,4 +115,47 @@ pub fn evaluate_block<T: Trace>(
             TracedBlockVar::Local(equation, output) => locals[*equation][*output].clone(),
         })
         .collect()
+}
+
+struct EquationFormatHelper<'a>(usize, &'a Primitive, &'a Vec<TracedBlockVar>);
+impl<'a> std::fmt::Debug for EquationFormatHelper<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let input_list = self
+            .2
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<String>>()
+            .join(" ");
+        match &self.1 {
+            Primitive::Block(b) => {
+                if f.alternate() {
+                    write!(f, "%{} <- Block {:#?} {}", self.0, b, input_list)?
+                } else {
+                    write!(f, "%{} <- Block {:?} {}", self.0, b, input_list)?
+                }
+            }
+            _ => write!(f, "%{} <- {:?} {}", self.0, self.1, input_list)?,
+        }
+        Ok(())
+    }
+}
+
+struct ExprInputCountFormatHelper(usize);
+impl std::fmt::Debug for ExprInputCountFormatHelper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Input count: {}", self.0)
+    }
+}
+
+struct ExprOutputsFormatHelper<'a>(&'a Vec<TracedBlockVar>);
+impl<'a> std::fmt::Debug for ExprOutputsFormatHelper<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let output_list = self
+            .0
+            .iter()
+            .map(|i| i.to_string())
+            .collect::<Vec<String>>()
+            .join(" ");
+        write!(f, "Outputs: {}", output_list)
+    }
 }
