@@ -1,6 +1,8 @@
+mod error;
 mod eval_trace;
 mod expr_trace;
 mod grad;
+mod tensor;
 mod trace;
 
 #[cfg(test)]
