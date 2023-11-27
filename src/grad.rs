@@ -30,7 +30,6 @@ where
             let e = &self.expressions[i];
             write!(f, "{}%{} <- {:?}", new_line, i, e)?;
         }
-
         Ok(())
     }
 }
