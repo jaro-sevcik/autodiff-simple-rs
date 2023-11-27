@@ -182,7 +182,7 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
             Primitive::Constant(c) => {
                 assert_eq!(inputs.len(), 0);
                 vec![Self::Tracer::new(
-                    self.inner.constant(*c),
+                    self.inner.constant(c.clone()),
                     self.linear_zero(),
                 )]
             }

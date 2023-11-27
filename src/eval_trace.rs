@@ -11,7 +11,7 @@ impl Trace for EvalTrace {
 
     fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Vec<Self::Tracer> {
         match prim {
-            Primitive::Constant(c) => vec![*c],
+            Primitive::Constant(c) => vec![c.clone()],
             Primitive::Add => vec![inputs[0].add(inputs[1])],
             Primitive::Mul => vec![inputs[0].mul(inputs[1])],
             Primitive::Block(b) => evaluate_block(self, b, inputs),

@@ -281,6 +281,14 @@ impl Tensor {
 
 impl Debug for Tensor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<")?;
+        match self.storage.as_ref() {
+            TensorStorage::Error(_) => write!(f, "error")?,
+            TensorStorage::Float32(storage) => write!(f, "{:?}", storage)?,
+            TensorStorage::Int32(storage) => write!(f, "{:?}", storage)?,
+        }
+        write!(f, ", shape: {:?}", self.shape.0)?;
+        write!(f, ">")?;
         Ok(())
     }
 }
