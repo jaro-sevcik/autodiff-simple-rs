@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::fmt::Debug;
 use std::rc::Rc;
 
+use crate::tensor::Tensor;
 use crate::trace::*;
 
 // Captured grad trace graph.
@@ -65,8 +66,8 @@ struct LinearExpressionEvaluationContext<T: Trace> {
 impl<T: Trace> LinearExpressionEvaluationContext<T> {
     fn new(inputs: usize, expression_count: usize, trace: &T) -> Self {
         Self {
-            values: vec![trace.constant(0.0); expression_count],
-            inputs: vec![trace.constant(0.0); inputs],
+            values: vec![trace.constant(Tensor::scalar_f32(0.0)); expression_count],
+            inputs: vec![trace.constant(Tensor::scalar_f32(0.0)); inputs],
         }
     }
 
@@ -153,7 +154,7 @@ impl<Inner: Trace> GradTrace<Inner> {
             &self.inner,
         );
 
-        context.add_to_value(&result, &self.inner.constant(1.0), &self.inner);
+        context.add_to_value(&result, &self.inner.constant(Tensor::scalar_f32(1.0)), &self.inner);
 
         let mut position = graph.expressions.len();
         for e in graph.expressions.iter().rev() {

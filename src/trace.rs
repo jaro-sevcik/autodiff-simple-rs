@@ -1,8 +1,10 @@
+use crate::tensor::Tensor;
+
 #[derive(Debug, Clone)]
 pub enum Primitive {
     Mul,
     Add,
-    Constant(f32),
+    Constant(Tensor),
     Block(TracedBlock),
 }
 
@@ -26,7 +28,7 @@ pub trait Trace {
     fn mul(&self, lhs: &Self::Tracer, rhs: &Self::Tracer) -> Self::Tracer {
         self.primitive(&Primitive::Mul, &[lhs, rhs])[0].clone()
     }
-    fn constant(&self, value: f32) -> Self::Tracer {
+    fn constant(&self, value: Tensor) -> Self::Tracer {
         self.primitive(&Primitive::Constant(value), &[])[0].clone()
     }
 }
