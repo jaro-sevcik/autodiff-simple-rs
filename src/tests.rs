@@ -8,11 +8,14 @@ fn poly_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
     let value = &values[0];
     let x_2 = trace.mul(value, value);
     let x_times_2 = trace.mul(&trace.constant(Tensor::scalar_f32(2.0)), value);
-    vec![trace.add(&trace.add(&x_2, &x_times_2), &trace.constant(Tensor::scalar_f32(-3.0)))]
+    vec![trace.add(
+        &trace.add(&x_2, &x_times_2),
+        &trace.constant(Tensor::scalar_f32(-3.0)),
+    )]
 }
 
 fn to_scalars(t: &[Tensor]) -> Vec<f32> {
-    t.iter().map(|t| t.get_f32_item(&[]).unwrap()).collect()
+    t.iter().map(|t| t.get_f32_item(&[])).collect()
 }
 
 #[test]
@@ -58,7 +61,10 @@ fn eval_grad_multivar_mul() {
     let x = Tensor::scalar_f32(3.0);
     let y = Tensor::scalar_f32(4.0);
     let grad_test_fn = grad::<EvalTrace, _>(test_multivar_mul_fn, 2);
-    assert_eq!(to_scalars(&grad_test_fn(&EvalTrace {}, &[x, y])), [4.0, 3.0]);
+    assert_eq!(
+        to_scalars(&grad_test_fn(&EvalTrace {}, &[x, y])),
+        [4.0, 3.0]
+    );
 }
 
 #[test]
@@ -74,7 +80,10 @@ fn eval_jit_grad_multivar_mul() {
     let x = Tensor::scalar_f32(3.0);
     let y = Tensor::scalar_f32(4.0);
     let jit_of_grad_test_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(test_multivar_mul_fn, 2));
-    assert_eq!(to_scalars(&jit_of_grad_test_fn(&EvalTrace {}, &[x, y])), [4.0, 3.0]);
+    assert_eq!(
+        to_scalars(&jit_of_grad_test_fn(&EvalTrace {}, &[x, y])),
+        [4.0, 3.0]
+    );
 }
 
 fn test_multi_output_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {

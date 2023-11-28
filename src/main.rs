@@ -1,4 +1,3 @@
-mod error;
 mod eval_trace;
 mod expr_trace;
 mod grad;
@@ -20,7 +19,10 @@ fn test_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
     let value = &values[0];
     let x_2 = trace.mul(value, value);
     let x_times_4 = trace.mul(&trace.constant(Tensor::scalar_f32(4.0)), value);
-    vec![trace.add(&trace.add(&x_2, &x_times_4), &trace.constant(Tensor::scalar_f32(6.0)))]
+    vec![trace.add(
+        &trace.add(&x_2, &x_times_4),
+        &trace.constant(Tensor::scalar_f32(6.0)),
+    )]
 }
 
 fn test_multi_output_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {

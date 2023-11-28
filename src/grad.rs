@@ -153,7 +153,11 @@ impl<Inner: Trace> GradTrace<Inner> {
             &self.inner,
         );
 
-        context.add_to_value(&result, &self.inner.constant(Tensor::scalar_f32(1.0)), &self.inner);
+        context.add_to_value(
+            &result,
+            &self.inner.constant(Tensor::scalar_f32(1.0)),
+            &self.inner,
+        );
 
         let mut position = graph.expressions.len();
         for e in graph.expressions.iter().rev() {
