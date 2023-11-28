@@ -514,7 +514,10 @@ struct TensorIndex {
 impl TensorIndex {
     pub fn new(shape: &Shape, dimensions: usize) -> Self {
         let mut index = Vec::with_capacity(dimensions);
-        for dim in shape.0[..dimensions].iter().rev() {
+        for dim in shape.0[..usize::min(dimensions, shape.0.len())]
+            .iter()
+            .rev()
+        {
             index.push(TensorIndexElement {
                 shape: dim.clone(),
                 i: 0,
