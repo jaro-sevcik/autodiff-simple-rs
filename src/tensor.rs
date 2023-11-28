@@ -46,6 +46,19 @@ impl Shape {
     pub fn size(&self) -> usize {
         self.0.iter().fold(1usize, |size, dim| size * dim.size)
     }
+
+    pub fn is_continuous(&self) -> bool {
+        let mut last_size = 1usize;
+        let mut last_stride = 1usize;
+        for ShapeDimension { size, stride } in self.0.iter().rev() {
+            if last_size * last_stride != *stride {
+                return false;
+            }
+            last_size = *size;
+            last_stride = *stride;
+        }
+        return true;
+    }
 }
 
 #[derive(Clone)]
@@ -367,6 +380,61 @@ impl Tensor {
             storage: self.storage.clone(),
         }
     }
+
+    pub fn reshape(&self, shape: &[usize]) -> Self {
+        let size = self.shape.size();
+        let new_size = shape.iter().fold(1usize, |size, dim| size * dim);
+        assert_eq!(size, new_size);
+        // If the current shape is continuous, then just reuse the same storage with the new shape.
+        let new_shape = ContiguousShapeBuilder::from_sizes(shape).finish();
+        if self.shape.is_continuous() {
+            return Self {
+                shape: new_shape,
+                storage: self.storage.clone(),
+            };
+        }
+
+        // Otherwise we need to copy.
+        let dims = self.shape.dims();
+        let mut index = TensorIndex::new(&self.shape, dims - 1);
+        let ShapeDimension { size, stride } = if dims > 0 {
+            self.shape.dim(dims - 1)
+        } else {
+            ShapeDimension { size: 1, stride: 1 }
+        };
+        let mut dst_offset = 0;
+        match self.storage.as_ref() {
+            TensorStorage::Float32(old_storage) => {
+                let mut storage = vec![f32::default(); new_size];
+                while let Some(mut src_offset) = index.next() {
+                    for i in 0..size {
+                        storage[dst_offset] = old_storage[src_offset];
+                        src_offset += stride;
+                        dst_offset += 1;
+                    }
+                }
+                Self {
+                    storage: Arc::new(TensorStorage::Float32(storage)),
+                    shape: new_shape,
+                }
+            }
+            TensorStorage::Int32(old_storage) => {
+                let mut storage = vec![i32::default(); new_size];
+                while let Some(mut src_offset) = index.next() {
+                    for i in 0..size {
+                        storage[dst_offset] = old_storage[src_offset];
+                        src_offset += stride;
+                        dst_offset += 1;
+                    }
+                }
+                Self {
+                    storage: Arc::new(TensorStorage::Int32(storage)),
+                    shape: new_shape,
+                }
+            }
+            _ => self.clone(),
+        }
+    }
 }
 
 impl Debug for Tensor {
@@ -499,6 +567,14 @@ impl ContiguousShapeBuilder {
             dims: Vec::new(),
             size: 1,
         }
+    }
+
+    fn from_sizes(sizes: &[usize]) -> Self {
+        let mut builder = Self::new();
+        for s in sizes {
+            builder.add_low(*s);
+        }
+        builder
     }
 
     fn add_low(&mut self, dim_size: usize) {
