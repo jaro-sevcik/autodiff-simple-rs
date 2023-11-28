@@ -2,6 +2,7 @@ use std::cmp::PartialEq;
 use std::fmt::Debug;
 use std::ops::{Add, Mul};
 use std::sync::Arc;
+
 #[derive(PartialEq, Debug)]
 pub enum DType {
     F32,
@@ -394,70 +395,38 @@ where
     F: Fn(T, T) -> T,
 {
     let d = lhs_shape.dims();
+    // Fast path for scalars.
     if d == 0 {
         return (lhs_shape.clone(), vec![op(lhs[0], rhs[0])]);
     }
-    let mut iteration_space = vec![(0usize, 0usize, 0usize); d];
+
     let ShapeDimension {
         size: batch_size,
         stride: lhs_stride,
     } = lhs_shape.dim(d - 1);
     let rhs_stride = rhs_shape.dim(d - 1).stride;
 
-    // Currently, we just adopt the LHS storage, but that might not be the smartest idea.
-    let mut size = 1usize;
-    let mut res_shape = vec![ShapeDimension { size: 0, stride: 0 }; d];
-    for i in (0..lhs_shape.dims()).rev() {
-        let dim_size = lhs_shape.dim(i).size;
-        res_shape[i] = ShapeDimension {
-            size: dim_size,
-            stride: size,
-        };
-        size *= dim_size;
+    let mut result_shape_builder = ContiguousShapeBuilder::new();
+    for d in lhs_shape.0.iter().rev() {
+        result_shape_builder.add_low(d.size);
     }
-    let mut result_storage = vec![init; size];
-    let mut res_pos = 0usize;
-    'outer: loop {
-        // Get the start of the iteration.
-        let (mut lhs_pos, mut rhs_pos) = if d >= 2 {
-            (iteration_space[d - 2].1, iteration_space[d - 2].2)
-        } else {
-            (0usize, 0usize)
-        };
-        for _i in 0..batch_size {
-            result_storage[res_pos] = op(lhs[lhs_pos], rhs[rhs_pos]);
-            lhs_pos += lhs_stride;
-            rhs_pos += rhs_stride;
-            res_pos += 1;
-        }
+    let mut result_storage = vec![init; result_shape_builder.size()];
+    let result_shape = result_shape_builder.finish();
 
-        // Move the finger forwards.
-        let mut current = d - 1;
-        loop {
-            if current == 0 {
-                // There is no dimension to advance, we are done now.
-                break 'outer;
-            }
-            current -= 1;
-            let next_index = iteration_space[current].0 + 1;
-            if next_index != lhs_shape.dim(current).size {
-                // Bump the pointers for this dimension.
-                // We also need to reset the pointers in all the higher dimensions,
-                // but we do it just once outside of this loop.
-                iteration_space[current].0 = next_index;
-                iteration_space[current].1 += lhs_shape.dim(current).stride;
-                iteration_space[current].2 += rhs_shape.dim(current).stride;
-                break;
-            }
-            // We reached the end of the |current| dimension.
-            // Let us try to move to th eouter dimension.
-        }
-        // Reset all the higher dimension pointers.
-        for i in current + 1..d {
-            iteration_space[i] = (0, iteration_space[i - 1].1, iteration_space[i - 1].2);
+    let mut lhs_index = TensorIndex::new(lhs_shape, d - 1);
+    let mut rhs_index = TensorIndex::new(rhs_shape, d - 1);
+    let mut result_offset = 0usize;
+
+    while let Some(mut lhs_offset) = lhs_index.next() {
+        let mut rhs_offset = rhs_index.next().unwrap();
+        for _i in 0..batch_size {
+            result_storage[result_offset] = op(lhs[lhs_offset], rhs[rhs_offset]);
+            lhs_offset += lhs_stride;
+            rhs_offset += rhs_stride;
+            result_offset += 1;
         }
     }
-    (Shape(res_shape), result_storage)
+    (result_shape, result_storage)
 }
 
 #[derive(Debug)]
@@ -670,5 +639,5 @@ fn matmul_3x_2x_2x1_1x1_t() {
         &p.to_vec_f32(),
         &[1.0, 2.0, 6.0, 8.0, 15.0, 18.0, 28.0, 32.0, 45.0, 50.0, 66.0, 72.0]
     );
-    assert_eq!(&p.shape(), &[2, 3, 1, 2]);
+    assert_eq!(&p.shape(), &[2, 3, 2, 1]);
 }
