@@ -878,3 +878,19 @@ fn sum_3x2_t_to_3() {
     assert_eq!(&s.shape(), &[3]);
 }
 
+#[test]
+fn sum_2x2_to_scalar() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let s = t.sum(None, false);
+    assert_eq!(&s.to_data_f32(), &[10.0]);
+    assert_eq!(&s.shape(), &[]);
+}
+
+#[test]
+fn sum_2x2_to_scalar_keepdim() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let s = t.sum(None, true);
+    assert_eq!(&s.to_data_f32(), &[10.0]);
+    assert_eq!(&s.shape(), &[1, 1]);
+}
+
