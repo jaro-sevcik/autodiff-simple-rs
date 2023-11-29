@@ -65,8 +65,8 @@ struct LinearExpressionEvaluationContext<T: Trace> {
 impl<T: Trace> LinearExpressionEvaluationContext<T> {
     fn new(inputs: usize, expression_count: usize, trace: &T) -> Self {
         Self {
-            values: vec![trace.constant(Tensor::scalar_f32(0.0)); expression_count],
-            inputs: vec![trace.constant(Tensor::scalar_f32(0.0)); inputs],
+            values: vec![trace.constant(Tensor::from_scalar_f32(0.0)); expression_count],
+            inputs: vec![trace.constant(Tensor::from_scalar_f32(0.0)); inputs],
         }
     }
 
@@ -155,7 +155,7 @@ impl<Inner: Trace> GradTrace<Inner> {
 
         context.add_to_value(
             &result,
-            &self.inner.constant(Tensor::scalar_f32(1.0)),
+            &self.inner.constant(Tensor::from_scalar_f32(1.0)),
             &self.inner,
         );
 

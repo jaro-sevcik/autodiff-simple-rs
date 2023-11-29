@@ -83,21 +83,21 @@ impl Tensor {
         }
     }
 
-    pub fn scalar_f32(value: f32) -> Self {
+    pub fn from_scalar_f32(value: f32) -> Self {
         Self {
             shape: Shape(Vec::new()),
             storage: Arc::new(TensorStorage::Float32(vec![value])),
         }
     }
 
-    pub fn scalar_i32(value: i32) -> Self {
+    pub fn from_scalar_i32(value: i32) -> Self {
         Self {
             shape: Shape(Vec::new()),
             storage: Arc::new(TensorStorage::Int32(vec![value])),
         }
     }
 
-    pub fn new_f32(values: &[f32], shape: &[usize]) -> Self {
+    pub fn from_data_f32(values: &[f32], shape: &[usize]) -> Self {
         let mut size = 1usize;
         let mut shape_dims = Vec::new();
         for i in (0..shape.len()).rev() {
@@ -118,43 +118,57 @@ impl Tensor {
         }
     }
 
-    pub fn to_vec_f32(&self) -> Vec<f32> {
+    pub fn from_constant_broadcast_f32(constant: f32, shape: &[usize]) -> Self {
+        let tensor_shape = shape
+            .iter()
+            .map(|size| ShapeDimension {
+                size: *size,
+                stride: 0,
+            })
+            .collect();
+        Self {
+            shape: Shape(tensor_shape),
+            storage: Arc::new(TensorStorage::Float32(vec![constant])),
+        }
+    }
+
+    pub fn ones(shape: &[usize]) -> Self {
+        Self::from_constant_broadcast_f32(1.0, shape)
+    }
+
+    pub fn zeros(shape: &[usize]) -> Self {
+        Self::from_constant_broadcast_f32(0.0, shape)
+    }
+
+    pub fn to_data_f32(&self) -> Vec<f32> {
         let storage = match self.storage.as_ref() {
             TensorStorage::Float32(s) => s,
             _ => panic!("to_vec_f32 needs tensor with f32 storage"),
         };
 
-        let size = self.shape.size();
         let dims = self.shape.dims();
-        let mut res = Vec::with_capacity(size);
-        let mut index = vec![(0usize, 0usize); self.shape.dims()];
-        if size == 1 {
+        if dims == 0 {
             return vec![storage[0]];
         }
-        'outer: loop {
-            res.push(storage[index[dims - 1].1]);
-
-            // Now try to advance the index.
-            let mut current = dims - 1;
-            loop {
-                index[current].0 += 1;
-                index[current].1 += self.shape.dim(current).stride;
-                if index[current].0 < self.shape.dim(current).size {
-                    break;
-                }
-                if current == 0 {
-                    break 'outer;
-                }
-                current -= 1;
-            }
-            for i in current + 1..dims {
-                index[i] = (0usize, index[i - 1].1);
+        let mut index = TensorIndex::from_shape(&self.shape, dims - 1);
+        let ShapeDimension {
+            size: dim_size,
+            stride,
+        } = self.shape.dim(dims - 1);
+        let mut dst_offset = 0;
+        let size = self.shape.size();
+        let mut data = vec![f32::default(); size];
+        while let Some(mut src_offset) = index.next() {
+            for _i in 0..dim_size {
+                data[dst_offset] = storage[src_offset];
+                src_offset += stride;
+                dst_offset += 1;
             }
         }
-        res
+        data
     }
 
-    pub fn get_f32_item(&self, index: &[usize]) -> f32 {
+    pub fn get_item_f32(&self, index: &[usize]) -> f32 {
         if let TensorStorage::Float32(storage) = self.storage.as_ref() {
             if self.shape.dims() != index.len() {
                 panic!("Invalid index (dimension count mismatch");
@@ -331,8 +345,8 @@ impl Tensor {
                 let mut result_storage = vec![0.0f32; result_size];
                 let result_shape = result_shape_builder.finish();
                 let mut result_offset = 0usize;
-                let mut lhs_tensor_index = TensorIndex::new(&self.shape, d - 2);
-                let mut rhs_tensor_index = TensorIndex::new(&other.shape, d - 2);
+                let mut lhs_tensor_index = TensorIndex::from_shape(&self.shape, d - 2);
+                let mut rhs_tensor_index = TensorIndex::from_shape(&other.shape, d - 2);
 
                 let lhs_stride = self.shape.dim(d - 1).stride;
                 let rhs_stride = other.shape.dim(d - 2).stride;
@@ -396,7 +410,7 @@ impl Tensor {
 
         // Otherwise we need to copy.
         let dims = self.shape.dims();
-        let mut index = TensorIndex::new(&self.shape, dims - 1);
+        let mut index = TensorIndex::from_shape(&self.shape, dims - 1);
         let ShapeDimension { size, stride } = if dims > 0 {
             self.shape.dim(dims - 1)
         } else {
@@ -433,6 +447,57 @@ impl Tensor {
                 }
             }
             _ => self.clone(),
+        }
+    }
+
+    pub fn sum(&self, axis: Option<&[usize]>, keep_dim: bool) -> Self {
+        let dims = self.shape.dims();
+        let mut other_index = TensorIndex::new();
+        let mut sum_index;
+        let mut shape_builder = ContiguousShapeBuilder::new();
+        if let Some(axis) = axis {
+            sum_index = TensorIndex::new();
+            let mut finger = axis.len();
+            for i in (0..dims).rev() {
+                if finger > 0 && axis[finger - 1] == i {
+                    finger -= 1;
+                    sum_index.add_low(self.shape.dim(i));
+                    if keep_dim {
+                        shape_builder.add_low(1);
+                    }
+                } else {
+                    other_index.add_low(self.shape.dim(i));
+                    shape_builder.add_low(self.shape.dim(i).size);
+                };
+            }
+        } else {
+            sum_index = TensorIndex::from_shape(&self.shape, dims);
+            if keep_dim {
+                for _ in 0..dims {
+                    shape_builder.add_low(1);
+                }
+            }
+        }
+        let result_size = shape_builder.size();
+        match self.storage.as_ref() {
+            TensorStorage::Float32(storage) => {
+                let mut result_storage = vec![0.0f32; result_size];
+                let mut result_offset = 0;
+                while let Some(base_offset) = other_index.next() {
+                    let mut temp_index = sum_index.clone();
+                    let mut sum = 0.0;
+                    while let Some(offset) = temp_index.next() {
+                        sum += storage[base_offset + offset];
+                    }
+                    result_storage[result_offset] = sum;
+                    result_offset += 1;
+                }
+                Self {
+                    shape: shape_builder.finish(),
+                    storage: TensorStorage::Float32(result_storage).into(),
+                }
+            }
+            _ => Self::error(&self.shape, "Sum is only supported for f32 tensors"),
         }
     }
 }
@@ -481,8 +546,8 @@ where
     let mut result_storage = vec![init; result_shape_builder.size()];
     let result_shape = result_shape_builder.finish();
 
-    let mut lhs_index = TensorIndex::new(lhs_shape, d - 1);
-    let mut rhs_index = TensorIndex::new(rhs_shape, d - 1);
+    let mut lhs_index = TensorIndex::from_shape(lhs_shape, d - 1);
+    let mut rhs_index = TensorIndex::from_shape(rhs_shape, d - 1);
     let mut result_offset = 0usize;
 
     while let Some(mut lhs_offset) = lhs_index.next() {
@@ -497,14 +562,14 @@ where
     (result_shape, result_storage)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TensorIndexElement {
     shape: ShapeDimension,
     i: usize,
     offset: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TensorIndex {
     // |index| stores the state of iteration in reverse dimension order.
     index: Vec<TensorIndexElement>,
@@ -512,19 +577,39 @@ struct TensorIndex {
 }
 
 impl TensorIndex {
-    pub fn new(shape: &Shape, dimensions: usize) -> Self {
-        let mut index = Vec::with_capacity(dimensions);
+    pub fn from_shape(shape: &Shape, dimensions: usize) -> Self {
+        let mut res = Self::with_capacity(dimensions);
         for dim in shape.0[..usize::min(dimensions, shape.0.len())]
             .iter()
             .rev()
         {
-            index.push(TensorIndexElement {
-                shape: dim.clone(),
-                i: 0,
-                offset: 0,
-            });
+            res.add_low(dim.clone());
         }
-        TensorIndex { index, first: true }
+        res
+    }
+
+    pub fn new() -> Self {
+        TensorIndex {
+            index: Vec::new(),
+            first: true,
+        }
+    }
+
+    pub fn with_capacity(c: usize) -> Self {
+        TensorIndex {
+            index: Vec::with_capacity(c),
+            first: true,
+        }
+    }
+
+    pub fn add_low(&mut self, dim: ShapeDimension) {
+        // Make sure we do not add iteration dimensions after starting iteration.
+        assert!(self.first);
+        self.index.push(TensorIndexElement {
+            shape: dim,
+            i: 0,
+            offset: 0,
+        });
     }
 
     pub fn next(&mut self) -> Option<usize> {
@@ -601,122 +686,195 @@ impl ContiguousShapeBuilder {
 
 #[test]
 fn scalar_add() {
-    let t = Tensor::scalar_f32(1.0).add(&Tensor::scalar_f32(2.0));
-    assert_eq!(t.get_f32_item(&[]), 3.0);
+    let t = Tensor::from_scalar_f32(1.0).add(&Tensor::from_scalar_f32(2.0));
+    assert_eq!(t.get_item_f32(&[]), 3.0);
 }
 
 #[test]
 fn scalar_mul() {
-    let t = Tensor::scalar_f32(2.0).mul(&Tensor::scalar_f32(3.0));
-    assert_eq!(t.get_f32_item(&[]), 6.0);
+    let t = Tensor::from_scalar_f32(2.0).mul(&Tensor::from_scalar_f32(3.0));
+    assert_eq!(t.get_item_f32(&[]), 6.0);
 }
 
 #[test]
 fn tensor2d_add() {
-    let t1 = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
-    let t2 = Tensor::new_f32(&[10.0, 20.0, 30.0, 40.0], &[2, 2]);
+    let t1 = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let t2 = Tensor::from_data_f32(&[10.0, 20.0, 30.0, 40.0], &[2, 2]);
     let t = t1.add(&t2);
-    assert_eq!(&t.to_vec_f32(), &[11.0, 22.0, 33.0, 44.0]);
+    assert_eq!(&t.to_data_f32(), &[11.0, 22.0, 33.0, 44.0]);
 }
 
 #[test]
 fn tensor2d_add_transposed() {
-    let t1 = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).transpose();
-    let t2 = Tensor::new_f32(&[10.0, 20.0, 30.0, 40.0], &[2, 2]);
+    let t1 = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).transpose();
+    let t2 = Tensor::from_data_f32(&[10.0, 20.0, 30.0, 40.0], &[2, 2]);
 
-    assert_eq!(&t1.add(&t2).to_vec_f32(), &[11.0, 23.0, 32.0, 44.0]);
-    assert_eq!(&t2.add(&t1).to_vec_f32(), &[11.0, 23.0, 32.0, 44.0]);
+    assert_eq!(&t1.add(&t2).to_data_f32(), &[11.0, 23.0, 32.0, 44.0]);
+    assert_eq!(&t2.add(&t1).to_data_f32(), &[11.0, 23.0, 32.0, 44.0]);
 }
 
 #[test]
 fn construct_destruct_0d() {
-    let t = Tensor::new_f32(&[1.0], &[]);
-    assert_eq!(&t.to_vec_f32(), &[1.0]);
+    let t = Tensor::from_data_f32(&[1.0], &[]);
+    assert_eq!(&t.to_data_f32(), &[1.0]);
 }
 
 #[test]
 fn construct_destruct_1d() {
-    let t = Tensor::new_f32(&[1.0, 2.0, 3.0], &[3]);
-    assert_eq!(&t.to_vec_f32(), &[1.0, 2.0, 3.0]);
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0], &[3]);
+    assert_eq!(&t.to_data_f32(), &[1.0, 2.0, 3.0]);
 }
 
 #[test]
 fn construct_destruct_2d() {
-    let t = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
-    assert_eq!(&t.to_vec_f32(), &[1.0, 2.0, 3.0, 4.0]);
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    assert_eq!(&t.to_data_f32(), &[1.0, 2.0, 3.0, 4.0]);
 }
 
 #[test]
 fn construct_destruct_3d() {
-    let t = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
-    assert_eq!(&t.to_vec_f32(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    assert_eq!(&t.to_data_f32(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
 }
 
 #[test]
 fn matmul_2x2_2x2() {
-    let t1 = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
-    let t2 = Tensor::new_f32(&[10.0, 20.0, 30.0, 40.0], &[2, 2]);
-    assert_eq!(&t1.matmul(&t2).to_vec_f32(), &[70.0, 100.0, 150.0, 220.0]);
+    let t1 = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let t2 = Tensor::from_data_f32(&[10.0, 20.0, 30.0, 40.0], &[2, 2]);
+    assert_eq!(&t1.matmul(&t2).to_data_f32(), &[70.0, 100.0, 150.0, 220.0]);
 }
 
 #[test]
 fn matmul_dot_product() {
-    let t1 = Tensor::new_f32(&[1.0, 2.0, 3.0], &[1, 3]);
-    let t2 = Tensor::new_f32(&[4.0, 3.0, 2.0], &[3, 1]);
+    let t1 = Tensor::from_data_f32(&[1.0, 2.0, 3.0], &[1, 3]);
+    let t2 = Tensor::from_data_f32(&[4.0, 3.0, 2.0], &[3, 1]);
     let p = t1.matmul(&t2);
-    assert_eq!(&p.to_vec_f32(), &[16.0]);
+    assert_eq!(&p.to_data_f32(), &[16.0]);
     assert_eq!(&p.shape(), &[1, 1]);
 }
 
 #[test]
 fn matmul_2x3_3x1() {
-    let t1 = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
-    let t2 = Tensor::new_f32(&[4.0, 3.0, 2.0], &[1, 3]).transpose();
+    let t1 = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let t2 = Tensor::from_data_f32(&[4.0, 3.0, 2.0], &[1, 3]).transpose();
     let p = t1.matmul(&t2);
-    assert_eq!(&p.to_vec_f32(), &[16.0, 43.0]);
+    assert_eq!(&p.to_data_f32(), &[16.0, 43.0]);
     assert_eq!(&p.shape(), &[2, 1]);
 }
 
 #[test]
 fn matmul_2x_1x3_3x1() {
-    let t1 = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 1, 3]);
-    let t2 = Tensor::new_f32(&[4.0, 3.0, 2.0, 1.0, 2.0, 3.0], &[2, 1, 3]).transpose();
+    let t1 = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 1, 3]);
+    let t2 = Tensor::from_data_f32(&[4.0, 3.0, 2.0, 1.0, 2.0, 3.0], &[2, 1, 3]).transpose();
     let p = t1.matmul(&t2);
-    assert_eq!(&p.to_vec_f32(), &[16.0, 32.0]);
+    assert_eq!(&p.to_data_f32(), &[16.0, 32.0]);
     assert_eq!(&p.shape(), &[2, 1, 1]);
 }
 
 #[test]
 fn matmul_2x_1x2_2x2() {
-    let t1 = Tensor::new_f32(&[4.0, 3.0, 2.0, 1.0], &[2, 1, 2]);
-    let t2 = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    let t1 = Tensor::from_data_f32(&[4.0, 3.0, 2.0, 1.0], &[2, 1, 2]);
+    let t2 = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
     let p = t1.matmul(&t2);
-    assert_eq!(&p.to_vec_f32(), &[13.0, 20.0, 17.0, 20.0]);
+    assert_eq!(&p.to_data_f32(), &[13.0, 20.0, 17.0, 20.0]);
     assert_eq!(&p.shape(), &[2, 1, 2]);
 }
 
 #[test]
 fn matmul_2x_1x2_2x2_t() {
-    let t1 = Tensor::new_f32(&[4.0, 3.0, 2.0, 1.0], &[2, 1, 2]);
-    let t2 = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]).transpose();
+    let t1 = Tensor::from_data_f32(&[4.0, 3.0, 2.0, 1.0], &[2, 1, 2]);
+    let t2 =
+        Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]).transpose();
     let p = t1.matmul(&t2);
-    assert_eq!(&p.to_vec_f32(), &[10.0, 24.0, 16.0, 22.0]);
+    assert_eq!(&p.to_data_f32(), &[10.0, 24.0, 16.0, 22.0]);
     assert_eq!(&p.shape(), &[2, 1, 2]);
 }
 
 #[test]
 fn matmul_3x_2x_2x1_1x1_t() {
-    let t1 = Tensor::new_f32(
+    let t1 = Tensor::from_data_f32(
         &[
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ],
         &[3, 2, 2, 1],
     );
-    let t2 = Tensor::new_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2, 1, 1]);
+    let t2 = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2, 1, 1]);
     let p = t1.matmul(&t2);
     assert_eq!(
-        &p.to_vec_f32(),
+        &p.to_data_f32(),
         &[1.0, 2.0, 6.0, 8.0, 15.0, 18.0, 28.0, 32.0, 45.0, 50.0, 66.0, 72.0]
     );
     assert_eq!(&p.shape(), &[2, 3, 2, 1]);
 }
+
+#[test]
+fn reshape_2x2_to_4() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let r = t.reshape(&[4]);
+    assert_eq!(&r.to_data_f32(), &[1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(&r.shape(), &[4]);
+}
+
+#[test]
+fn reshape_1x1_to_scalar() {
+    let t = Tensor::from_data_f32(&[1.0], &[1, 1]);
+    let r = t.reshape(&[]);
+    assert_eq!(&r.to_data_f32(), &[1.0]);
+    assert_eq!(&r.shape(), &[]);
+}
+
+#[test]
+fn reshape_3x2_t_to_6() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]).transpose();
+    let r = t.reshape(&[6]);
+    assert_eq!(&r.to_data_f32(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+    assert_eq!(&r.shape(), &[6]);
+}
+
+#[test]
+fn ones_3x2() {
+    let t = Tensor::ones(&[3, 2]);
+    assert_eq!(&t.to_data_f32(), &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(&t.shape(), &[3, 2]);
+}
+
+#[test]
+fn sum_3x2_to_2() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let s = t.sum(Some(&[1]), false);
+    assert_eq!(&s.to_data_f32(), &[6.0, 15.0]);
+    assert_eq!(&s.shape(), &[2]);
+}
+
+#[test]
+fn sum_3x2_to_3() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let s = t.sum(Some(&[0]), false);
+    assert_eq!(&s.to_data_f32(), &[5.0, 7.0, 9.0]);
+    assert_eq!(&s.shape(), &[3]);
+}
+
+#[test]
+fn sum_3x2_to_2_keepdim() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let s = t.sum(Some(&[1]), true);
+    assert_eq!(&s.to_data_f32(), &[6.0, 15.0]);
+    assert_eq!(&s.shape(), &[2, 1]);
+}
+
+#[test]
+fn sum_2x2x2_to_2_keepdim() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
+    let s = t.sum(Some(&[1]), true);
+    assert_eq!(&s.to_data_f32(), &[4.0, 6.0, 12.0, 14.0]);
+    assert_eq!(&s.shape(), &[2, 1, 2]);
+}
+
+#[test]
+fn sum_3x2_t_to_3() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).transpose();
+    let s = t.sum(Some(&[1]), false);
+    assert_eq!(&s.to_data_f32(), &[5.0, 7.0, 9.0]);
+    assert_eq!(&s.shape(), &[3]);
+}
+

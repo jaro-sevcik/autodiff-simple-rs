@@ -18,10 +18,10 @@ use trace::Trace;
 fn test_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
     let value = &values[0];
     let x_2 = trace.mul(value, value);
-    let x_times_4 = trace.mul(&trace.constant(Tensor::scalar_f32(4.0)), value);
+    let x_times_4 = trace.mul(&trace.constant(Tensor::from_scalar_f32(4.0)), value);
     vec![trace.add(
         &trace.add(&x_2, &x_times_4),
-        &trace.constant(Tensor::scalar_f32(6.0)),
+        &trace.constant(Tensor::from_scalar_f32(6.0)),
     )]
 }
 
@@ -44,7 +44,7 @@ fn main() {
     env_logger::builder().format_timestamp(None).init();
     trace!("Started");
 
-    let x_for_eval = Tensor::scalar_f32(3.0);
+    let x_for_eval = Tensor::from_scalar_f32(3.0);
 
     let eval_trace = EvalTrace {};
     println!(
