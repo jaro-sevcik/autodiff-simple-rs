@@ -450,6 +450,31 @@ impl Tensor {
         }
     }
 
+    pub fn broadcast(&self, dim_size_pairs: &[(usize, usize)]) -> Self {
+        let mut shape_dims = self.shape.0.clone();
+        let mut last_dim: Option<usize> = None;
+        for (dim, size) in dim_size_pairs {
+            assert!(
+                last_dim.is_none() || last_dim.unwrap() < *dim,
+                "Broadcst (dimension, size) pairs must be sorted by dimension index"
+            );
+            assert_eq!(
+                shape_dims[*dim].size, 1usize,
+                "Broadcasted dimensions must be of size one, but dimension {} has size {}",
+                *dim, shape_dims[*dim].size
+            );
+            shape_dims[*dim] = ShapeDimension {
+                size: *size,
+                stride: 0,
+            };
+            last_dim = Some(*dim)
+        }
+        Self {
+            shape: Shape(shape_dims),
+            storage: self.storage.clone(),
+        }
+    }
+
     pub fn sum(&self, axis: Option<&[usize]>, keep_dim: bool) -> Self {
         let dims = self.shape.dims();
         let mut other_index = TensorIndex::new();
@@ -894,3 +919,26 @@ fn sum_2x2_to_scalar_keepdim() {
     assert_eq!(&s.shape(), &[1, 1]);
 }
 
+#[test]
+fn broadcast_1d() {
+    let t = Tensor::from_data_f32(&[1.0], &[1]);
+    let r = t.broadcast(&[(0, 4)]);
+    assert_eq!(&r.to_data_f32(), &[1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(&r.shape(), &[4]);
+}
+
+#[test]
+fn broadcast_1x1_to_3x2() {
+    let t = Tensor::from_data_f32(&[1.0], &[1, 1]);
+    let r = t.broadcast(&[(0, 2), (1, 3)]);
+    assert_eq!(&r.to_data_f32(), &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(&r.shape(), &[2, 3]);
+}
+#[test]
+
+fn broadcast_2x1x2_to_2x2x2() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 1, 2]);
+    let r = t.broadcast(&[(1, 2)]);
+    assert_eq!(&r.to_data_f32(), &[1.0, 2.0, 1.0, 2.0, 3.0, 4.0, 3.0, 4.0]);
+    assert_eq!(&r.shape(), &[2, 2, 2]);
+}
