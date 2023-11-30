@@ -17,11 +17,32 @@ impl Primitive {
             _ => 1,
         }
     }
+
+    pub fn output_shapes<T: Shaped>(&self, input_shapes: &[&T]) -> Vec<Vec<usize>> {
+        match self {
+            Primitive::Mul => vec![input_shapes[0].shape()],
+            Primitive::Add => vec![input_shapes[0].shape()],
+            Primitive::MatMul => {
+                let mut result_shape = input_shapes[0].shape();
+                let result_len = result_shape.len();
+                let rhs_shape = input_shapes[1].shape();
+                result_shape[result_len - 1] = rhs_shape[rhs_shape.len()];
+                vec![result_shape]
+            }
+            Primitive::Reshape(shape) => vec![shape.clone()],
+            Primitive::Constant(t) => vec![t.shape()],
+            Primitive::Block(b) => b.outputs.iter().map(|(shape, _)| shape.clone()).collect(),
+        }
+    }
+}
+
+pub trait Shaped {
+    fn shape(&self) -> Vec<usize>;
 }
 
 // Represents the state captured during tracing.
 pub trait Trace {
-    type Tracer: Clone;
+    type Tracer: Clone + Shaped;
     fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Vec<Self::Tracer>;
 
     fn add(&self, lhs: &Self::Tracer, rhs: &Self::Tracer) -> Self::Tracer {
@@ -66,16 +87,17 @@ impl TracedBlockVar {
 #[derive(Clone)]
 pub struct TracedBlock {
     pub program: Vec<(Primitive, Vec<TracedBlockVar>)>,
-    pub outputs: Vec<TracedBlockVar>,
-    pub input_count: usize,
+    // Output is a pair of a shape and a location.
+    pub outputs: Vec<(Vec<usize>, TracedBlockVar)>,
+    pub input_shapes: Vec<Vec<usize>>,
 }
 
 impl TracedBlock {
-    pub fn new(input_count: usize) -> Self {
+    pub fn new(input_shapes: Vec<Vec<usize>>) -> Self {
         Self {
             program: Vec::new(),
             outputs: Vec::new(),
-            input_count,
+            input_shapes,
         }
     }
 }
@@ -83,7 +105,7 @@ impl TracedBlock {
 impl std::fmt::Debug for TracedBlock {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut d = f.debug_list();
-        d.entry(&ExprInputCountFormatHelper(self.input_count));
+        d.entry(&ExprInputCountFormatHelper(&self.input_shapes));
         d.entry(&ExprOutputsFormatHelper(&self.outputs));
         for i in 0..self.program.len() {
             let (prim, inputs) = &self.program[i];
@@ -100,7 +122,8 @@ pub fn evaluate_block<T: Trace>(
     b: &TracedBlock,
     inputs: &[&T::Tracer],
 ) -> Vec<T::Tracer> {
-    assert_eq!(b.input_count, inputs.len());
+    // TODO check the shapes, too!
+    assert_eq!(b.input_shapes.len(), inputs.len());
     let mut locals = Vec::<Vec<T::Tracer>>::new();
     for (prim, args) in &b.program {
         // Resolve the arguments.
@@ -120,7 +143,7 @@ pub fn evaluate_block<T: Trace>(
     // Extract the output.
     b.outputs
         .iter()
-        .map(|o| match o {
+        .map(|(_shape, output)| match output {
             TracedBlockVar::Input(i) => inputs[*i].clone(),
             TracedBlockVar::Local(equation, output) => locals[*equation][*output].clone(),
         })
@@ -150,20 +173,20 @@ impl<'a> std::fmt::Debug for EquationFormatHelper<'a> {
     }
 }
 
-struct ExprInputCountFormatHelper(usize);
-impl std::fmt::Debug for ExprInputCountFormatHelper {
+struct ExprInputCountFormatHelper<'a>(&'a [Vec<usize>]);
+impl<'a> std::fmt::Debug for ExprInputCountFormatHelper<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Input count: {}", self.0)
+        write!(f, "Input shapes: {:?}", self.0)
     }
 }
 
-struct ExprOutputsFormatHelper<'a>(&'a Vec<TracedBlockVar>);
+struct ExprOutputsFormatHelper<'a>(&'a Vec<(Vec<usize>, TracedBlockVar)>);
 impl<'a> std::fmt::Debug for ExprOutputsFormatHelper<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let output_list = self
             .0
             .iter()
-            .map(|i| i.to_string())
+            .map(|(shape, i)| format!("{}@{:?}", i.to_string(), shape))
             .collect::<Vec<String>>()
             .join(" ");
         write!(f, "Outputs: {}", output_list)

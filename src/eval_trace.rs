@@ -6,6 +6,12 @@ use crate::trace::*;
 #[derive(Debug, Clone)]
 pub struct EvalTrace {}
 
+impl Shaped for Tensor {
+    fn shape(&self) -> Vec<usize> {
+        self.shape()
+    }
+}
+
 impl Trace for EvalTrace {
     type Tracer = Tensor;
 

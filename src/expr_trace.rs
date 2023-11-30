@@ -8,6 +8,13 @@ use crate::trace::*;
 #[derive(Debug, Clone)]
 pub struct ExprTracer {
     variable: TracedBlockVar,
+    shape: Vec<usize>,
+}
+
+impl Shaped for ExprTracer {
+    fn shape(&self) -> Vec<usize> {
+        self.shape.clone()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -16,9 +23,9 @@ pub struct ExprTrace {
 }
 
 impl ExprTrace {
-    fn new(inputs: usize) -> Self {
+    fn new(input_shapes: Vec<Vec<usize>>) -> Self {
         Self {
-            block: Rc::new(RefCell::new(TracedBlock::new(inputs))),
+            block: Rc::new(RefCell::new(TracedBlock::new(input_shapes))),
         }
     }
 
@@ -38,9 +45,11 @@ impl Trace for ExprTrace {
             expr_inputs.push(i.variable.clone());
         }
         let index = self.add_to_program(prim.clone(), expr_inputs);
-        (0..prim.output_count())
+        let output_shapes = prim.output_shapes(inputs);
+        (0..output_shapes.len())
             .map(|output| ExprTracer {
                 variable: TracedBlockVar::Local(index, output),
+                shape: output_shapes[output].clone(),
             })
             .collect()
     }
@@ -51,22 +60,27 @@ where
     GF: Fn(&ExprTrace, &[<ExprTrace as Trace>::Tracer]) -> Vec<<ExprTrace as Trace>::Tracer>,
 {
     move |in_trace, values| {
-        let expr_trace = ExprTrace::new(1);
+        let input_shapes: Vec<Vec<usize>> = values.iter().map(|v| v.shape()).collect();
+        let expr_trace = ExprTrace::new(input_shapes.clone());
         // Prepare the arguments as expression tracers.
         let parameter_tracers: Vec<ExprTracer> = (0..values.len())
             .map(|i| ExprTracer {
                 variable: TracedBlockVar::Input(i),
+                shape: values[i].shape(),
             })
             .collect();
         // Compute the expression with the expression trace.
         let result: Vec<ExprTracer> = fun(&expr_trace, &parameter_tracers);
         // Extract the outputs.
-        let outputs = result.iter().map(|r| r.variable.clone()).collect();
+        let outputs = result
+            .iter()
+            .map(|r| (r.shape(), r.variable.clone()))
+            .collect();
 
         // Pass the compiled expression to the underlying trace
         // as a "TracedBlock" primitive.
         let block = TracedBlock {
-            input_count: values.len(),
+            input_shapes,
             program: expr_trace.block.borrow().program.clone(),
             outputs,
         };

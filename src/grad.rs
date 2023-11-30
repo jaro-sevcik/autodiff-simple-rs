@@ -65,6 +65,7 @@ struct LinearExpressionEvaluationContext<T: Trace> {
 
 impl<T: Trace> LinearExpressionEvaluationContext<T> {
     fn new(inputs: usize, expression_count: usize, trace: &T) -> Self {
+        // TODO create the state with correct shapes!
         Self {
             values: vec![trace.constant(Tensor::from_scalar_f32(0.0)); expression_count],
             inputs: vec![trace.constant(Tensor::from_scalar_f32(0.0)); inputs],
@@ -86,6 +87,12 @@ impl<T: Trace> LinearExpressionEvaluationContext<T> {
 pub struct GradTracer<T> {
     value: T,
     grad: LinearExpressionValue,
+}
+
+impl<T: Shaped> Shaped for GradTracer<T> {
+    fn shape(&self) -> Vec<usize> {
+        self.value.shape()
+    }
 }
 
 impl<T> GradTracer<T> {
