@@ -4,6 +4,8 @@ use crate::tensor::Tensor;
 pub enum Primitive {
     Mul,
     Add,
+    MatMul,
+    Reshape(Vec<usize>),
     Constant(Tensor),
     Block(TracedBlock),
 }
@@ -30,6 +32,12 @@ pub trait Trace {
     }
     fn constant(&self, value: Tensor) -> Self::Tracer {
         self.primitive(&Primitive::Constant(value), &[])[0].clone()
+    }
+    fn matmul(&self, lhs: &Self::Tracer, rhs: &Self::Tracer) -> Self::Tracer {
+        self.primitive(&Primitive::MatMul, &[lhs, rhs])[0].clone()
+    }
+    fn reshape(&self, shape: &[usize], input: &Self::Tracer) -> Self::Tracer {
+        self.primitive(&Primitive::Reshape(shape.to_vec()), &[input])[0].clone()
     }
 }
 

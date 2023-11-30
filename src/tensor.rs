@@ -421,7 +421,7 @@ impl Tensor {
             TensorStorage::Float32(old_storage) => {
                 let mut storage = vec![f32::default(); new_size];
                 while let Some(mut src_offset) = index.next() {
-                    for i in 0..size {
+                    for _ in 0..size {
                         storage[dst_offset] = old_storage[src_offset];
                         src_offset += stride;
                         dst_offset += 1;
@@ -435,7 +435,7 @@ impl Tensor {
             TensorStorage::Int32(old_storage) => {
                 let mut storage = vec![i32::default(); new_size];
                 while let Some(mut src_offset) = index.next() {
-                    for i in 0..size {
+                    for _ in 0..size {
                         storage[dst_offset] = old_storage[src_offset];
                         src_offset += stride;
                         dst_offset += 1;

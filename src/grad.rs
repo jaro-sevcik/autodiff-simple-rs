@@ -54,6 +54,7 @@ impl Debug for LinearExpressionValue {
 #[derive(Debug, Clone)]
 enum LinearExpression<T> {
     Mul(LinearExpressionValue, T),
+    MatMul(LinearExpressionValue, T),
     Add(LinearExpressionValue, LinearExpressionValue),
 }
 
@@ -129,6 +130,18 @@ impl<Inner: Trace> GradTrace<Inner> {
         LinearExpressionValue::ExpressionIndex(index)
     }
 
+    fn linear_matmul(
+        &self,
+        lhs: LinearExpressionValue,
+        rhs: Inner::Tracer,
+    ) -> LinearExpressionValue {
+        if let LinearExpressionValue::Zero = lhs {
+            return lhs;
+        }
+        let index = self.add_expression(LinearExpression::MatMul(lhs, rhs));
+        LinearExpressionValue::ExpressionIndex(index)
+    }
+
     fn linear_mul(&self, lhs: LinearExpressionValue, rhs: Inner::Tracer) -> LinearExpressionValue {
         if let LinearExpressionValue::Zero = lhs {
             return lhs;
@@ -171,6 +184,9 @@ impl<Inner: Trace> GradTrace<Inner> {
                 LinearExpression::Mul(grad, c) => {
                     context.add_to_value(grad, &self.inner.mul(&v, c), &self.inner)
                 }
+                LinearExpression::MatMul(grad, c) => {
+                    context.add_to_value(grad, &self.inner.matmul(&v, c), &self.inner)
+                }
             }
         }
         context.inputs
@@ -202,6 +218,21 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
                     self.linear_mul(inputs[0].grad.clone(), inputs[1].value.clone()),
                     self.linear_mul(inputs[1].grad.clone(), inputs[0].value.clone()),
                 );
+                vec![Self::Tracer::new(value, grad_value)]
+            }
+            Primitive::MatMul => {
+                assert_eq!(inputs.len(), 2);
+                let value = self.inner.mul(&inputs[0].value, &inputs[1].value);
+                let grad_value = self.linear_add(
+                    self.linear_matmul(inputs[0].grad.clone(), inputs[1].value.clone()),
+                    self.linear_matmul(inputs[1].grad.clone(), inputs[0].value.clone()),
+                );
+                vec![Self::Tracer::new(value, grad_value)]
+            }
+            Primitive::Reshape(shape) => {
+                assert_eq!(inputs.len(), 1);
+                let value = self.inner.reshape(shape, &inputs[0].value);
+                let grad_value = inputs[0].grad.clone(); // TODO provide correct operator!
                 vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::Block(b) => evaluate_block(self, b, inputs),
