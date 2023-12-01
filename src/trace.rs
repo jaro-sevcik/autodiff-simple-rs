@@ -6,6 +6,7 @@ pub enum Primitive {
     Add,
     MatMul,
     Reshape(Shape),
+    Transpose,
     Constant(Tensor),
     Block(TracedBlock),
 }
@@ -26,10 +27,11 @@ impl Primitive {
                 let mut result_shape = input_shapes[0].shape().as_ref().to_vec();
                 let result_len = result_shape.len();
                 let rhs_shape = input_shapes[1].shape();
-                result_shape[result_len - 1] = rhs_shape[rhs_shape.len()];
-                vec![Shape::from_iter(result_shape)] // TODO construct directly from the vector.
+                result_shape[result_len - 1] = rhs_shape[rhs_shape.len() - 1];
+                vec![Shape::from(result_shape)]
             }
             Primitive::Reshape(shape) => vec![shape.clone()],
+            Primitive::Transpose => vec![input_shapes[0].shape().transpose()],
             Primitive::Constant(t) => vec![t.shape()],
             Primitive::Block(b) => b.outputs.iter().map(|(shape, _)| shape.clone()).collect(),
         }
@@ -59,6 +61,9 @@ pub trait Trace {
     }
     fn reshape(&self, shape: Shape, input: &Self::Tracer) -> Self::Tracer {
         self.primitive(&Primitive::Reshape(shape), &[input])[0].clone()
+    }
+    fn transpose(&self, input: &Self::Tracer) -> Self::Tracer {
+        self.primitive(&Primitive::Transpose, &[input])[0].clone()
     }
 }
 

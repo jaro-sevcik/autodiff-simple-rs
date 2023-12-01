@@ -68,6 +68,16 @@ impl Shape {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    pub fn transpose(&self) -> Shape {
+        let l = self.len();
+        assert!(self.len() >= 2);
+        let mut result = self.0.as_ref().clone();
+        let t = result[l-1];
+        result[l-1] = result[l-2];
+        result[l-2] = t;
+        Self::from(result)
+    }
 }
 
 impl PartialEq<[usize]> for Shape {
@@ -79,9 +89,9 @@ impl PartialEq<[usize]> for Shape {
     }
 }
 
-impl<T: Iterator<Item = usize>> From<T> for Shape {
-    fn from(i: T) -> Self {
-        Self(i.collect::<Vec<usize>>().into())
+impl From<Vec<usize>> for Shape {
+    fn from(v: Vec<usize>) -> Self {
+        Self(Arc::new(v))
     }
 }
 
@@ -207,7 +217,7 @@ impl Tensor {
     pub fn get_item_f32(&self, index: &[usize]) -> f32 {
         if let TensorStorage::Float32(storage) = self.storage.as_ref() {
             if self.shape.dims() != index.len() {
-                panic!("Invalid index (dimension count mismatch");
+                panic!("Invalid index (dimension count mismatch)");
             }
 
             let mut offset = 0;
@@ -411,7 +421,7 @@ impl Tensor {
     pub fn reshape(&self, shape: Shape) -> Self {
         let size = self.shape.size();
         let new_size = shape.as_ref().iter().fold(1usize, |size, dim| size * dim);
-        assert_eq!(size, new_size);
+        assert_eq!(size, new_size, "Tensor can be only reshaped to same size tensors.");
         // If the current shape is continuous, then just reuse the same storage with the new shape.
         let new_shape = ContiguousShapeBuilder::from_sizes(shape.as_ref()).finish();
         if self.shape.is_continuous() {

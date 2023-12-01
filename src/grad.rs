@@ -68,6 +68,7 @@ enum LinearExpression<T> {
     MatMulRight(T, LinearExpressionValue),
     Add(LinearExpressionValue, LinearExpressionValue),
     Reshape(LinearExpressionValue),
+    Transpose(LinearExpressionValue),
 }
 
 struct LinearExpressionEvaluationContext<T: Trace> {
@@ -77,8 +78,7 @@ struct LinearExpressionEvaluationContext<T: Trace> {
 
 impl<T: Trace> LinearExpressionEvaluationContext<T> {
     fn new(input_shapes: &[Shape], expression_shapes: &[Shape], trace: &T) -> Self {
-        // TODO create the state with correct shapes!
-        // let inputs = input_shapes.iter().map(|s| Tensor::zeros(&s)).collect();
+        // Create the state with correct shapes.
         let values: Vec<<T as Trace>::Tracer> = expression_shapes
             .iter()
             .map(|s| trace.constant(Tensor::zeros(s.clone())))
@@ -203,6 +203,14 @@ impl<Inner: Trace> GradTrace<Inner> {
         LinearExpressionValue::ExpressionIndex(index)
     }
 
+    fn linear_transpose(&self, shape: Shape, input: LinearExpressionValue) -> LinearExpressionValue {
+        if let LinearExpressionValue::Zero(_) = input {
+            return LinearExpressionValue::Zero(shape);
+        }
+        let index = self.add_expression(shape, LinearExpression::Transpose(input));
+        LinearExpressionValue::ExpressionIndex(index)
+    }
+
     fn linear_zero(&self, shape: Shape) -> LinearExpressionValue {
         LinearExpressionValue::Zero(shape)
     }
@@ -239,14 +247,17 @@ impl<Inner: Trace> GradTrace<Inner> {
                     context.add_to_value(grad, &self.inner.mul(&v, c), &self.inner)
                 }
                 LinearExpression::MatMulLeft(grad, c) => {
-                    context.add_to_value(grad, &self.inner.matmul(&v, c), &self.inner)
+                    context.add_to_value(grad, &self.inner.matmul(&v, &self.inner.transpose(c)), &self.inner)
                 }
                 LinearExpression::MatMulRight(c, grad) => {
-                    context.add_to_value(grad, &self.inner.matmul(c, &v), &self.inner)
+                    context.add_to_value(grad, &self.inner.matmul(&self.inner.transpose(c), &v), &self.inner)
                 }
                 LinearExpression::Reshape(grad) => {
                     let shape = graph.shape_for(grad);
                     context.add_to_value(grad, &self.inner.reshape(shape, &v), &self.inner)
+                }
+                LinearExpression::Transpose(grad) => {
+                    context.add_to_value(grad, &self.inner.transpose(&v), &self.inner)
                 }
             }
         }
@@ -317,7 +328,13 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
             Primitive::Reshape(shape) => {
                 assert_eq!(inputs.len(), 1);
                 let value = self.inner.reshape(shape.clone(), &inputs[0].value);
-                let grad_value = self.linear_reshape(shape.clone(), inputs[0].grad.clone()); // TODO provide correct operator!
+                let grad_value = self.linear_reshape(shape.clone(), inputs[0].grad.clone());
+                vec![Self::Tracer::new(value, grad_value)]
+            }
+            Primitive::Transpose => {
+                assert_eq!(inputs.len(), 1);
+                let value = self.inner.transpose(&inputs[0].value);
+                let grad_value = self.linear_transpose(value.shape(), inputs[0].grad.clone());
                 vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::Block(b) => evaluate_block(self, b, inputs),
@@ -355,10 +372,6 @@ where
             .collect();
         let result = fun(&grad_trace, &parameter_tracers);
         trace!(
-            "Grad linear graph: {:#?}",
-            grad_trace.linear_grad_graph.borrow()
-        );
-        println!(
             "Grad linear graph: {:#?}",
             grad_trace.linear_grad_graph.borrow()
         );

@@ -22,6 +22,7 @@ impl Trace for EvalTrace {
             Primitive::Mul => vec![inputs[0].mul(inputs[1])],
             Primitive::MatMul => vec![inputs[0].matmul(inputs[1])],
             Primitive::Reshape(s) => vec![inputs[0].reshape(s.clone())],
+            Primitive::Transpose => vec![inputs[0].transpose()],
             Primitive::Block(b) => evaluate_block(self, b, inputs),
         }
     }
