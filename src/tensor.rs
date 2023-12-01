@@ -7,7 +7,6 @@ use std::sync::Arc;
 pub enum DType {
     F32,
     I32,
-    Error,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -28,7 +27,6 @@ impl PartialEq for ShapeDimension {
 pub enum TensorStorage {
     Float32(Vec<f32>),
     Int32(Vec<i32>),
-    Error(String),
 }
 
 #[derive(PartialEq, Debug, Clone)]
@@ -72,14 +70,6 @@ impl Tensor {
         match *self.storage {
             TensorStorage::Float32(_) => DType::F32,
             TensorStorage::Int32(_) => DType::I32,
-            TensorStorage::Error(_) => DType::I32,
-        }
-    }
-
-    pub fn error(shape: &Shape, message: &str) -> Self {
-        Self {
-            shape: shape.clone(),
-            storage: Arc::new(TensorStorage::Error(message.to_string())),
         }
     }
 
@@ -188,40 +178,18 @@ impl Tensor {
         self.shape.0.iter().map(|s| s.size).collect()
     }
 
-    fn get_error_if_not_compatible(&self, other: &Self) -> Option<Self> {
-        // Propagate errors.
-        if let TensorStorage::Error(_) = *self.storage {
-            return Some(Tensor {
-                shape: self.shape.clone(),
-                storage: self.storage.clone(),
-            });
-        }
-        if let TensorStorage::Error(_) = *other.storage {
-            return Some(Tensor {
-                shape: other.shape.clone(),
-                storage: other.storage.clone(),
-            });
-        }
-        // Check shapes and types.
-        if self.shape != other.shape {
-            return Some(Self::error(
-                &self.shape,
-                "Incompatible tensors - different shapes",
-            ));
-        }
-        if self.dtype() != other.dtype() {
-            return Some(Self::error(
-                &self.shape,
-                "Incompatible tensors - different types",
-            ));
-        }
-        None
-    }
-
     pub fn add(&self, rhs: &Self) -> Self {
-        if let Some(e) = self.get_error_if_not_compatible(rhs) {
-            return e;
-        }
+        // Make sure the shape and the type match.
+        assert_eq!(
+            self.shape, rhs.shape,
+            "Incompatible tensors - different shapes"
+        );
+        assert_eq!(
+            self.dtype(),
+            rhs.dtype(),
+            "Incompatible tensors - different types"
+        );
+
         match (self.storage.as_ref(), rhs.storage.as_ref()) {
             (TensorStorage::Float32(lhs_storage), TensorStorage::Float32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<f32, _>(
@@ -251,14 +219,22 @@ impl Tensor {
                     storage: Arc::new(TensorStorage::Int32(result)),
                 }
             }
-            (_, _) => Self::error(&self.shape, "Unsupported combination for addition"),
+            (_, _) => panic!("Unsupported combination for addition"),
         }
     }
 
     pub fn mul(&self, rhs: &Self) -> Self {
-        if let Some(e) = self.get_error_if_not_compatible(rhs) {
-            return e;
-        }
+        // Make sure the shape and the type match.
+        assert_eq!(
+            self.shape, rhs.shape,
+            "Incompatible tensors - different shapes"
+        );
+        assert_eq!(
+            self.dtype(),
+            rhs.dtype(),
+            "Incompatible tensors - different types"
+        );
+
         match (self.storage.as_ref(), rhs.storage.as_ref()) {
             (TensorStorage::Float32(lhs_storage), TensorStorage::Float32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<f32, _>(
@@ -288,51 +264,45 @@ impl Tensor {
                     storage: Arc::new(TensorStorage::Int32(result)),
                 }
             }
-            (_, _) => Self::error(&self.shape, "Unsupported combination for addition"),
+            (_, _) => panic!("Unsupported combination for addition"),
         }
     }
 
     pub fn matmul(&self, other: &Self) -> Self {
         // Propagate errors.
-        if let TensorStorage::Error(_) = *self.storage {
-            return Tensor {
-                shape: self.shape.clone(),
-                storage: self.storage.clone(),
-            };
-        }
-        if let TensorStorage::Error(_) = *other.storage {
-            return Tensor {
-                shape: other.shape.clone(),
-                storage: other.storage.clone(),
-            };
-        }
-        if self.shape.dims() != other.shape.dims() {
-            return Tensor::error(&self.shape, "matmul requires tensor of same dimensions");
-        }
+        assert_eq!(
+            self.shape.dims(),
+            other.shape.dims(),
+            "matmul requires tensor of same dimensions"
+        );
         let d = self.shape.dims();
-        if d < 2 {
-            return Tensor::error(&self.shape, "matmul at least two dimensions");
-        }
+        assert!(
+            d >= 2,
+            "matmul operands must have at least two dimensions, left operand has {}",
+            d
+        );
+        assert!(
+            other.shape.dims() >= 2,
+            "matmul operands must have at least two dimensions, right operand has {}",
+            other.shape.dims()
+        );
         for i in 0..d - 2 {
-            if self.shape.dim(i).size != other.shape.dim(i).size {
-                return Tensor::error(
-                    &self.shape,
-                    "matmul requires same size of dimensions [0..dims-2]",
-                );
-            }
-        }
-        if self.shape.dim(d - 1).size != other.shape.dim(d - 2).size {
-            return Tensor::error(
-                &self.shape,
-                "matmul requires matching lhs[d-1] and rhs[d-2] dimension sizes ",
+            assert_eq!(
+                self.shape.dim(i).size,
+                other.shape.dim(i).size,
+                "matmul requires same size of dimensions [0..dims-2]"
             );
         }
+        let m = self.shape.dim(d - 2).size;
+        let n = other.shape.dim(d - 1).size;
+        let k = self.shape.dim(d - 1).size;
+        assert_eq!(
+            k,
+            other.shape.dim(d - 2).size,
+            "matmul requires matching lhs[d-1] and rhs[d-2] dimension sizes"
+        );
         match (self.storage.as_ref(), other.storage.as_ref()) {
             (TensorStorage::Float32(lhs_storage), TensorStorage::Float32(rhs_storage)) => {
-                let m = self.shape.dim(d - 2).size;
-                let n = other.shape.dim(d - 1).size;
-                let k = self.shape.dim(d - 1).size;
-
                 // Build the result storage and the result shape.
                 let mut result_shape_builder = ContiguousShapeBuilder::new();
                 result_shape_builder.add_low(n);
@@ -375,10 +345,7 @@ impl Tensor {
                     storage: Arc::new(TensorStorage::Float32(result_storage)),
                 }
             }
-            (_, _) => Self::error(
-                &self.shape,
-                "Only float32 matrix multiplication is supported",
-            ),
+            (_, _) => panic!("Only float32 matrix multiplication is supported"),
         }
     }
 
@@ -522,7 +489,7 @@ impl Tensor {
                     storage: TensorStorage::Float32(result_storage).into(),
                 }
             }
-            _ => Self::error(&self.shape, "Sum is only supported for f32 tensors"),
+            _ => panic!("Sum is only supported for f32 tensors"),
         }
     }
 }
@@ -531,7 +498,6 @@ impl Debug for Tensor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<")?;
         match self.storage.as_ref() {
-            TensorStorage::Error(_) => write!(f, "error")?,
             TensorStorage::Float32(storage) => write!(f, "{:?}", storage)?,
             TensorStorage::Int32(storage) => write!(f, "{:?}", storage)?,
         }
