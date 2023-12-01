@@ -9,13 +9,23 @@ use crate::trace::*;
 // Captured grad trace graph.
 #[derive(Clone)]
 struct LinearGraph<T> {
-    expressions: Vec<LinearExpression<T>>,
+    expressions: Vec<(Vec<usize>, LinearExpression<T>)>,
+    input_shapes: Vec<Vec<usize>>,
 }
 
 impl<T> LinearGraph<T> {
-    fn new() -> Self {
+    fn new(input_shapes: Vec<Vec<usize>>) -> Self {
         Self {
             expressions: Vec::new(),
+            input_shapes,
+        }
+    }
+
+    fn shape_for(&self, value: &LinearExpressionValue) -> Vec<usize> {
+        match value {
+            LinearExpressionValue::ExpressionIndex(i) => self.expressions[*i].0.clone(),
+            LinearExpressionValue::Input(i) => self.input_shapes[*i].clone(),
+            LinearExpressionValue::Zero(shape) => shape.clone(),
         }
     }
 }
@@ -38,13 +48,13 @@ where
 enum LinearExpressionValue {
     Input(usize),
     ExpressionIndex(usize),
-    Zero,
+    Zero(Vec<usize>),
 }
 
 impl Debug for LinearExpressionValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LinearExpressionValue::Zero => write!(f, "zero"),
+            LinearExpressionValue::Zero(shape) => write!(f, "zero@{:?}", shape),
             LinearExpressionValue::Input(i) => write!(f, "I{}", i),
             LinearExpressionValue::ExpressionIndex(i) => write!(f, "%{}", i),
         }
@@ -56,6 +66,7 @@ enum LinearExpression<T> {
     Mul(LinearExpressionValue, T),
     MatMul(LinearExpressionValue, T),
     Add(LinearExpressionValue, LinearExpressionValue),
+    Reshape(LinearExpressionValue),
 }
 
 struct LinearExpressionEvaluationContext<T: Trace> {
@@ -78,7 +89,7 @@ impl<T: Trace> LinearExpressionEvaluationContext<T> {
                 self.values[*i] = trace.add(&self.values[*i], value)
             }
             LinearExpressionValue::Input(i) => self.inputs[*i] = trace.add(&self.inputs[*i], value),
-            LinearExpressionValue::Zero => (),
+            LinearExpressionValue::Zero(_shape) => (),
         }
     }
 }
@@ -108,17 +119,17 @@ pub struct GradTrace<Inner: Trace> {
 }
 
 impl<Inner: Trace> GradTrace<Inner> {
-    fn new(inner: Inner) -> Self {
-        let linear_grad_graph = Rc::new(RefCell::new(LinearGraph::new()));
+    fn new(inner: Inner, input_shapes: Vec<Vec<usize>>) -> Self {
+        let linear_grad_graph = Rc::new(RefCell::new(LinearGraph::new(input_shapes)));
         Self {
             inner,
             linear_grad_graph,
         }
     }
 
-    fn add_expression(&self, op: LinearExpression<Inner::Tracer>) -> usize {
+    fn add_expression(&self, shape: Vec<usize>, op: LinearExpression<Inner::Tracer>) -> usize {
         let mut graph = self.linear_grad_graph.borrow_mut();
-        graph.expressions.push(op);
+        graph.expressions.push((shape, op));
         graph.expressions.len() - 1
     }
 
@@ -126,14 +137,15 @@ impl<Inner: Trace> GradTrace<Inner> {
         &self,
         lhs: LinearExpressionValue,
         rhs: LinearExpressionValue,
+        shape: Vec<usize>,
     ) -> LinearExpressionValue {
-        if let LinearExpressionValue::Zero = lhs {
+        if let LinearExpressionValue::Zero(_) = lhs {
             return rhs;
         }
-        if let LinearExpressionValue::Zero = rhs {
+        if let LinearExpressionValue::Zero(_) = rhs {
             return lhs;
         }
-        let index = self.add_expression(LinearExpression::Add(lhs, rhs));
+        let index = self.add_expression(shape, LinearExpression::Add(lhs, rhs));
         LinearExpressionValue::ExpressionIndex(index)
     }
 
@@ -141,24 +153,42 @@ impl<Inner: Trace> GradTrace<Inner> {
         &self,
         lhs: LinearExpressionValue,
         rhs: Inner::Tracer,
+        shape: Vec<usize>,
     ) -> LinearExpressionValue {
-        if let LinearExpressionValue::Zero = lhs {
-            return lhs;
+        if let LinearExpressionValue::Zero(_) = lhs {
+            return LinearExpressionValue::Zero(shape);
         }
-        let index = self.add_expression(LinearExpression::MatMul(lhs, rhs));
+        let index = self.add_expression(shape, LinearExpression::MatMul(lhs, rhs));
         LinearExpressionValue::ExpressionIndex(index)
     }
 
-    fn linear_mul(&self, lhs: LinearExpressionValue, rhs: Inner::Tracer) -> LinearExpressionValue {
-        if let LinearExpressionValue::Zero = lhs {
+    fn linear_mul(
+        &self,
+        lhs: LinearExpressionValue,
+        rhs: Inner::Tracer,
+        shape: Vec<usize>,
+    ) -> LinearExpressionValue {
+        if let LinearExpressionValue::Zero(_) = lhs {
             return lhs;
         }
-        let index = self.add_expression(LinearExpression::Mul(lhs, rhs));
+        let index = self.add_expression(shape, LinearExpression::Mul(lhs, rhs));
         LinearExpressionValue::ExpressionIndex(index)
     }
 
-    fn linear_zero(&self) -> LinearExpressionValue {
-        LinearExpressionValue::Zero
+    fn linear_reshape(
+        &self,
+        shape: Vec<usize>,
+        input: LinearExpressionValue,
+    ) -> LinearExpressionValue {
+        if let LinearExpressionValue::Zero(_) = input {
+            return LinearExpressionValue::Zero(shape);
+        }
+        let index = self.add_expression(shape, LinearExpression::Reshape(input));
+        LinearExpressionValue::ExpressionIndex(index)
+    }
+
+    fn linear_zero(&self, shape: Vec<usize>) -> LinearExpressionValue {
+        LinearExpressionValue::Zero(shape)
     }
 
     fn evaluate_graph(
@@ -180,7 +210,7 @@ impl<Inner: Trace> GradTrace<Inner> {
         );
 
         let mut position = graph.expressions.len();
-        for e in graph.expressions.iter().rev() {
+        for (_shape, e) in graph.expressions.iter().rev() {
             position -= 1;
             let v = context.values[position].clone();
             match e {
@@ -193,6 +223,10 @@ impl<Inner: Trace> GradTrace<Inner> {
                 }
                 LinearExpression::MatMul(grad, c) => {
                     context.add_to_value(grad, &self.inner.matmul(&v, c), &self.inner)
+                }
+                LinearExpression::Reshape(grad) => {
+                    let shape = graph.shape_for(grad);
+                    context.add_to_value(grad, &self.inner.reshape(&shape, &v), &self.inner)
                 }
             }
         }
@@ -209,37 +243,61 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
                 assert_eq!(inputs.len(), 0);
                 vec![Self::Tracer::new(
                     self.inner.constant(c.clone()),
-                    self.linear_zero(),
+                    self.linear_zero(c.shape()),
                 )]
             }
             Primitive::Add => {
                 assert_eq!(inputs.len(), 2);
                 let value = self.inner.add(&inputs[0].value, &inputs[1].value);
-                let grad_value = self.linear_add(inputs[0].grad.clone(), inputs[1].grad.clone());
+                let grad_value = self.linear_add(
+                    inputs[0].grad.clone(),
+                    inputs[1].grad.clone(),
+                    value.shape(),
+                );
                 vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::Mul => {
                 assert_eq!(inputs.len(), 2);
                 let value = self.inner.mul(&inputs[0].value, &inputs[1].value);
+                let shape = value.shape();
                 let grad_value = self.linear_add(
-                    self.linear_mul(inputs[0].grad.clone(), inputs[1].value.clone()),
-                    self.linear_mul(inputs[1].grad.clone(), inputs[0].value.clone()),
+                    self.linear_mul(
+                        inputs[0].grad.clone(),
+                        inputs[1].value.clone(),
+                        shape.clone(),
+                    ),
+                    self.linear_mul(
+                        inputs[1].grad.clone(),
+                        inputs[0].value.clone(),
+                        shape.clone(),
+                    ),
+                    shape,
                 );
                 vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::MatMul => {
                 assert_eq!(inputs.len(), 2);
                 let value = self.inner.mul(&inputs[0].value, &inputs[1].value);
+                let shape = value.shape();
                 let grad_value = self.linear_add(
-                    self.linear_matmul(inputs[0].grad.clone(), inputs[1].value.clone()),
-                    self.linear_matmul(inputs[1].grad.clone(), inputs[0].value.clone()),
+                    self.linear_matmul(
+                        inputs[0].grad.clone(),
+                        inputs[1].value.clone(),
+                        shape.clone(),
+                    ),
+                    self.linear_matmul(
+                        inputs[1].grad.clone(),
+                        inputs[0].value.clone(),
+                        shape.clone(),
+                    ),
+                    shape,
                 );
                 vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::Reshape(shape) => {
                 assert_eq!(inputs.len(), 1);
                 let value = self.inner.reshape(shape, &inputs[0].value);
-                let grad_value = inputs[0].grad.clone(); // TODO provide correct operator!
+                let grad_value = self.linear_reshape(shape.to_vec(), inputs[0].grad.clone()); // TODO provide correct operator!
                 vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::Block(b) => evaluate_block(self, b, inputs),
@@ -259,13 +317,14 @@ where
     T::Tracer: std::fmt::Debug,
 {
     move |trace, values| {
-        let grad_trace = GradTrace::new(trace.clone());
+        let input_shapes = values.iter().map(|v| v.shape()).collect();
+        let grad_trace = GradTrace::new(trace.clone(), input_shapes);
         let parameter_tracers: Vec<GradTracer<T::Tracer>> = (0..values.len())
             .map(|i| {
                 let grad = if i < grad_input_count {
                     LinearExpressionValue::Input(i)
                 } else {
-                    LinearExpressionValue::Zero
+                    LinearExpressionValue::Zero(values[i].shape())
                 };
                 GradTracer::<T::Tracer>::new(values[i].clone(), grad)
             })
