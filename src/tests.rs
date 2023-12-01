@@ -1,7 +1,7 @@
 use crate::eval_trace::EvalTrace;
 use crate::expr_trace::{jit, ExprTrace};
 use crate::grad::{grad, GradTrace};
-use crate::tensor::Tensor;
+use crate::tensor::{Shape, Tensor};
 use crate::trace::Trace;
 
 fn poly_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
@@ -117,8 +117,8 @@ fn composed_jit_grad_multivar_mul() {
 // Input: [1, 2]
 fn sum_via_matmul_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
     let value = &values[0];
-    let ones = trace.constant(Tensor::ones(&[2, 1]));
-    let res = trace.reshape(&[], &trace.matmul(value, &ones));
+    let ones = trace.constant(Tensor::ones(Shape::from_iter([2, 1])));
+    let res = trace.reshape(Shape::from_iter([]), &trace.matmul(value, &ones));
     vec![res]
 }
 
@@ -139,6 +139,7 @@ fn eval_grad_trivial_sum_via_matmul() {
     );
 }
 
+// TODO convert the tests below to test tensors, too.
 // #[test]
 // fn eval_grad_grad_poly() {
 //     let x = Tensor::from_scalar_f32(3.0);

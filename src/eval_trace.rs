@@ -1,4 +1,4 @@
-use crate::tensor::Tensor;
+use crate::tensor::{Shape, Tensor};
 use crate::trace::*;
 
 // Direct evaluation trace. This does not have any state because it just computes
@@ -7,7 +7,7 @@ use crate::trace::*;
 pub struct EvalTrace {}
 
 impl Shaped for Tensor {
-    fn shape(&self) -> Vec<usize> {
+    fn shape(&self) -> Shape {
         self.shape()
     }
 }
@@ -21,10 +21,7 @@ impl Trace for EvalTrace {
             Primitive::Add => vec![inputs[0].add(inputs[1])],
             Primitive::Mul => vec![inputs[0].mul(inputs[1])],
             Primitive::MatMul => vec![inputs[0].matmul(inputs[1])],
-            Primitive::Reshape(s) => {
-                println!("Reshaping {:?}", inputs[0]);
-                vec![inputs[0].reshape(s)]
-            }
+            Primitive::Reshape(s) => vec![inputs[0].reshape(s.clone())],
             Primitive::Block(b) => evaluate_block(self, b, inputs),
         }
     }

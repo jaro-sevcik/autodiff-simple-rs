@@ -1,11 +1,11 @@
-use crate::tensor::Tensor;
+use crate::tensor::{Shape, Tensor};
 
 #[derive(Debug, Clone)]
 pub enum Primitive {
     Mul,
     Add,
     MatMul,
-    Reshape(Vec<usize>),
+    Reshape(Shape),
     Constant(Tensor),
     Block(TracedBlock),
 }
@@ -18,16 +18,16 @@ impl Primitive {
         }
     }
 
-    pub fn output_shapes<T: Shaped>(&self, input_shapes: &[&T]) -> Vec<Vec<usize>> {
+    pub fn output_shapes<T: Shaped>(&self, input_shapes: &[&T]) -> Vec<Shape> {
         match self {
             Primitive::Mul => vec![input_shapes[0].shape()],
             Primitive::Add => vec![input_shapes[0].shape()],
             Primitive::MatMul => {
-                let mut result_shape = input_shapes[0].shape();
+                let mut result_shape = input_shapes[0].shape().as_ref().to_vec();
                 let result_len = result_shape.len();
                 let rhs_shape = input_shapes[1].shape();
                 result_shape[result_len - 1] = rhs_shape[rhs_shape.len()];
-                vec![result_shape]
+                vec![Shape::from_iter(result_shape)] // TODO construct directly from the vector.
             }
             Primitive::Reshape(shape) => vec![shape.clone()],
             Primitive::Constant(t) => vec![t.shape()],
@@ -37,7 +37,7 @@ impl Primitive {
 }
 
 pub trait Shaped {
-    fn shape(&self) -> Vec<usize>;
+    fn shape(&self) -> Shape;
 }
 
 // Represents the state captured during tracing.
@@ -57,8 +57,8 @@ pub trait Trace {
     fn matmul(&self, lhs: &Self::Tracer, rhs: &Self::Tracer) -> Self::Tracer {
         self.primitive(&Primitive::MatMul, &[lhs, rhs])[0].clone()
     }
-    fn reshape(&self, shape: &[usize], input: &Self::Tracer) -> Self::Tracer {
-        self.primitive(&Primitive::Reshape(shape.to_vec()), &[input])[0].clone()
+    fn reshape(&self, shape: Shape, input: &Self::Tracer) -> Self::Tracer {
+        self.primitive(&Primitive::Reshape(shape), &[input])[0].clone()
     }
 }
 
@@ -88,12 +88,12 @@ impl TracedBlockVar {
 pub struct TracedBlock {
     pub program: Vec<(Primitive, Vec<TracedBlockVar>)>,
     // Output is a pair of a shape and a location.
-    pub outputs: Vec<(Vec<usize>, TracedBlockVar)>,
-    pub input_shapes: Vec<Vec<usize>>,
+    pub outputs: Vec<(Shape, TracedBlockVar)>,
+    pub input_shapes: Vec<Shape>,
 }
 
 impl TracedBlock {
-    pub fn new(input_shapes: Vec<Vec<usize>>) -> Self {
+    pub fn new(input_shapes: Vec<Shape>) -> Self {
         Self {
             program: Vec::new(),
             outputs: Vec::new(),
@@ -173,14 +173,14 @@ impl<'a> std::fmt::Debug for EquationFormatHelper<'a> {
     }
 }
 
-struct ExprInputCountFormatHelper<'a>(&'a [Vec<usize>]);
+struct ExprInputCountFormatHelper<'a>(&'a [Shape]);
 impl<'a> std::fmt::Debug for ExprInputCountFormatHelper<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Input shapes: {:?}", self.0)
     }
 }
 
-struct ExprOutputsFormatHelper<'a>(&'a Vec<(Vec<usize>, TracedBlockVar)>);
+struct ExprOutputsFormatHelper<'a>(&'a Vec<(Shape, TracedBlockVar)>);
 impl<'a> std::fmt::Debug for ExprOutputsFormatHelper<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let output_list = self

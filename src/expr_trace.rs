@@ -3,16 +3,17 @@ use log::trace;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::tensor::Shape;
 use crate::trace::*;
 
 #[derive(Debug, Clone)]
 pub struct ExprTracer {
     variable: TracedBlockVar,
-    shape: Vec<usize>,
+    shape: Shape,
 }
 
 impl Shaped for ExprTracer {
-    fn shape(&self) -> Vec<usize> {
+    fn shape(&self) -> Shape {
         self.shape.clone()
     }
 }
@@ -23,7 +24,7 @@ pub struct ExprTrace {
 }
 
 impl ExprTrace {
-    fn new(input_shapes: Vec<Vec<usize>>) -> Self {
+    fn new(input_shapes: Vec<Shape>) -> Self {
         Self {
             block: Rc::new(RefCell::new(TracedBlock::new(input_shapes))),
         }
@@ -60,7 +61,7 @@ where
     GF: Fn(&ExprTrace, &[<ExprTrace as Trace>::Tracer]) -> Vec<<ExprTrace as Trace>::Tracer>,
 {
     move |in_trace, values| {
-        let input_shapes: Vec<Vec<usize>> = values.iter().map(|v| v.shape()).collect();
+        let input_shapes: Vec<Shape> = values.iter().map(|v| v.shape()).collect();
         let expr_trace = ExprTrace::new(input_shapes.clone());
         // Prepare the arguments as expression tracers.
         let parameter_tracers: Vec<ExprTracer> = (0..values.len())

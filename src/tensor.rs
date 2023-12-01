@@ -1,6 +1,8 @@
 use std::cmp::PartialEq;
+use std::convert::From;
 use std::fmt::Debug;
-use std::ops::{Add, Mul};
+use std::iter::Iterator;
+use std::ops::{Add, Index, Mul};
 use std::sync::Arc;
 
 #[derive(PartialEq, Debug)]
@@ -30,9 +32,9 @@ pub enum TensorStorage {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct Shape(Vec<ShapeDimension>);
+pub struct ShapeStride(Vec<ShapeDimension>);
 
-impl Shape {
+impl ShapeStride {
     pub fn dims(&self) -> usize {
         self.0.len()
     }
@@ -59,10 +61,53 @@ impl Shape {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Shape(Arc<Vec<usize>>);
+
+impl Shape {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+impl PartialEq<[usize]> for Shape {
+    fn eq(&self, other: &[usize]) -> bool {
+        self.as_ref() == other
+    }
+    fn ne(&self, other: &[usize]) -> bool {
+        self.as_ref() != other
+    }
+}
+
+impl<T: Iterator<Item = usize>> From<T> for Shape {
+    fn from(i: T) -> Self {
+        Self(i.collect::<Vec<usize>>().into())
+    }
+}
+
+impl FromIterator<usize> for Shape {
+    fn from_iter<T: IntoIterator<Item = usize>>(iter: T) -> Self {
+        Self(iter.into_iter().collect::<Vec<usize>>().into())
+    }
+}
+
+impl AsRef<[usize]> for Shape {
+    fn as_ref(&self) -> &[usize] {
+        &self.0.as_ref()
+    }
+}
+
+impl Index<usize> for Shape {
+    type Output = usize;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
 #[derive(Clone)]
 pub struct Tensor {
     storage: Arc<TensorStorage>,
-    shape: Shape,
+    shape: ShapeStride,
 }
 
 impl Tensor {
@@ -75,14 +120,14 @@ impl Tensor {
 
     pub fn from_scalar_f32(value: f32) -> Self {
         Self {
-            shape: Shape(Vec::new()),
+            shape: ShapeStride(Vec::new()),
             storage: Arc::new(TensorStorage::Float32(vec![value])),
         }
     }
 
     pub fn from_scalar_i32(value: i32) -> Self {
         Self {
-            shape: Shape(Vec::new()),
+            shape: ShapeStride(Vec::new()),
             storage: Arc::new(TensorStorage::Int32(vec![value])),
         }
     }
@@ -104,12 +149,13 @@ impl Tensor {
         let storage = Arc::new(TensorStorage::Float32(values.to_vec()));
         Self {
             storage,
-            shape: Shape(shape_dims),
+            shape: ShapeStride(shape_dims),
         }
     }
 
-    pub fn from_constant_broadcast_f32(constant: f32, shape: &[usize]) -> Self {
+    pub fn from_constant_broadcast_f32(constant: f32, shape: Shape) -> Self {
         let tensor_shape = shape
+            .as_ref()
             .iter()
             .map(|size| ShapeDimension {
                 size: *size,
@@ -117,16 +163,16 @@ impl Tensor {
             })
             .collect();
         Self {
-            shape: Shape(tensor_shape),
+            shape: ShapeStride(tensor_shape),
             storage: Arc::new(TensorStorage::Float32(vec![constant])),
         }
     }
 
-    pub fn ones(shape: &[usize]) -> Self {
+    pub fn ones(shape: Shape) -> Self {
         Self::from_constant_broadcast_f32(1.0, shape)
     }
 
-    pub fn zeros(shape: &[usize]) -> Self {
+    pub fn zeros(shape: Shape) -> Self {
         Self::from_constant_broadcast_f32(0.0, shape)
     }
 
@@ -174,7 +220,7 @@ impl Tensor {
         }
     }
 
-    pub fn shape(&self) -> Vec<usize> {
+    pub fn shape(&self) -> Shape {
         self.shape.0.iter().map(|s| s.size).collect()
     }
 
@@ -362,12 +408,12 @@ impl Tensor {
         }
     }
 
-    pub fn reshape(&self, shape: &[usize]) -> Self {
+    pub fn reshape(&self, shape: Shape) -> Self {
         let size = self.shape.size();
-        let new_size = shape.iter().fold(1usize, |size, dim| size * dim);
+        let new_size = shape.as_ref().iter().fold(1usize, |size, dim| size * dim);
         assert_eq!(size, new_size);
         // If the current shape is continuous, then just reuse the same storage with the new shape.
-        let new_shape = ContiguousShapeBuilder::from_sizes(shape).finish();
+        let new_shape = ContiguousShapeBuilder::from_sizes(shape.as_ref()).finish();
         if self.shape.is_continuous() {
             return Self {
                 shape: new_shape,
@@ -437,7 +483,7 @@ impl Tensor {
             last_dim = Some(*dim)
         }
         Self {
-            shape: Shape(shape_dims),
+            shape: ShapeStride(shape_dims),
             storage: self.storage.clone(),
         }
     }
@@ -509,12 +555,12 @@ impl Debug for Tensor {
 
 fn pointwise_binop<T: Copy, F>(
     lhs: &[T],
-    lhs_shape: &Shape,
+    lhs_shape: &ShapeStride,
     rhs: &[T],
-    rhs_shape: &Shape,
+    rhs_shape: &ShapeStride,
     op: F,
     init: T,
-) -> (Shape, Vec<T>)
+) -> (ShapeStride, Vec<T>)
 where
     F: Fn(T, T) -> T,
 {
@@ -568,7 +614,7 @@ struct TensorIndex {
 }
 
 impl TensorIndex {
-    pub fn from_shape(shape: &Shape, dimensions: usize) -> Self {
+    pub fn from_shape(shape: &ShapeStride, dimensions: usize) -> Self {
         let mut res = Self::with_capacity(dimensions);
         for dim in shape.0[..usize::min(dimensions, shape.0.len())]
             .iter()
@@ -668,10 +714,10 @@ impl ContiguousShapeBuilder {
         self.size
     }
 
-    fn finish(self) -> Shape {
+    fn finish(self) -> ShapeStride {
         let mut dims = self.dims;
         dims.reverse();
-        Shape(dims)
+        ShapeStride(dims)
     }
 }
 
@@ -741,7 +787,7 @@ fn matmul_dot_product() {
     let t2 = Tensor::from_data_f32(&[4.0, 3.0, 2.0], &[3, 1]);
     let p = t1.matmul(&t2);
     assert_eq!(&p.to_data_f32(), &[16.0]);
-    assert_eq!(&p.shape(), &[1, 1]);
+    assert_eq!(&p.shape().as_ref(), &[1, 1]);
 }
 
 #[test]
@@ -750,7 +796,7 @@ fn matmul_2x3_3x1() {
     let t2 = Tensor::from_data_f32(&[4.0, 3.0, 2.0], &[1, 3]).transpose();
     let p = t1.matmul(&t2);
     assert_eq!(&p.to_data_f32(), &[16.0, 43.0]);
-    assert_eq!(&p.shape(), &[2, 1]);
+    assert_eq!(&p.shape().as_ref(), &[2, 1]);
 }
 
 #[test]
@@ -759,7 +805,7 @@ fn matmul_2x_1x3_3x1() {
     let t2 = Tensor::from_data_f32(&[4.0, 3.0, 2.0, 1.0, 2.0, 3.0], &[2, 1, 3]).transpose();
     let p = t1.matmul(&t2);
     assert_eq!(&p.to_data_f32(), &[16.0, 32.0]);
-    assert_eq!(&p.shape(), &[2, 1, 1]);
+    assert_eq!(&p.shape().as_ref(), &[2, 1, 1]);
 }
 
 #[test]
@@ -768,7 +814,7 @@ fn matmul_2x_1x2_2x2() {
     let t2 = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
     let p = t1.matmul(&t2);
     assert_eq!(&p.to_data_f32(), &[13.0, 20.0, 17.0, 20.0]);
-    assert_eq!(&p.shape(), &[2, 1, 2]);
+    assert_eq!(&p.shape().as_ref(), &[2, 1, 2]);
 }
 
 #[test]
@@ -778,7 +824,7 @@ fn matmul_2x_1x2_2x2_t() {
         Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]).transpose();
     let p = t1.matmul(&t2);
     assert_eq!(&p.to_data_f32(), &[10.0, 24.0, 16.0, 22.0]);
-    assert_eq!(&p.shape(), &[2, 1, 2]);
+    assert_eq!(&p.shape().as_ref(), &[2, 1, 2]);
 }
 
 #[test]
@@ -795,38 +841,38 @@ fn matmul_3x_2x_2x1_1x1_t() {
         &p.to_data_f32(),
         &[1.0, 2.0, 6.0, 8.0, 15.0, 18.0, 28.0, 32.0, 45.0, 50.0, 66.0, 72.0]
     );
-    assert_eq!(&p.shape(), &[2, 3, 2, 1]);
+    assert_eq!(&p.shape().as_ref(), &[2, 3, 2, 1]);
 }
 
 #[test]
 fn reshape_2x2_to_4() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
-    let r = t.reshape(&[4]);
+    let r = t.reshape(Shape::from_iter([4]));
     assert_eq!(&r.to_data_f32(), &[1.0, 2.0, 3.0, 4.0]);
-    assert_eq!(&r.shape(), &[4]);
+    assert_eq!(&r.shape().as_ref(), &[4]);
 }
 
 #[test]
 fn reshape_1x1_to_scalar() {
     let t = Tensor::from_data_f32(&[1.0], &[1, 1]);
-    let r = t.reshape(&[]);
+    let r = t.reshape(Shape::from_iter([]));
     assert_eq!(&r.to_data_f32(), &[1.0]);
-    assert_eq!(&r.shape(), &[]);
+    assert_eq!(&r.shape().as_ref(), &[]);
 }
 
 #[test]
 fn reshape_3x2_t_to_6() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]).transpose();
-    let r = t.reshape(&[6]);
+    let r = t.reshape(Shape::from_iter([6]));
     assert_eq!(&r.to_data_f32(), &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
-    assert_eq!(&r.shape(), &[6]);
+    assert_eq!(&r.shape().as_ref(), &[6]);
 }
 
 #[test]
 fn ones_3x2() {
-    let t = Tensor::ones(&[3, 2]);
+    let t = Tensor::ones(Shape::from_iter([3, 2]));
     assert_eq!(&t.to_data_f32(), &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
-    assert_eq!(&t.shape(), &[3, 2]);
+    assert_eq!(&t.shape().as_ref(), &[3, 2]);
 }
 
 #[test]
@@ -834,7 +880,7 @@ fn sum_3x2_to_2() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     let s = t.sum(Some(&[1]), false);
     assert_eq!(&s.to_data_f32(), &[6.0, 15.0]);
-    assert_eq!(&s.shape(), &[2]);
+    assert_eq!(&s.shape().as_ref(), &[2]);
 }
 
 #[test]
@@ -842,7 +888,7 @@ fn sum_3x2_to_3() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     let s = t.sum(Some(&[0]), false);
     assert_eq!(&s.to_data_f32(), &[5.0, 7.0, 9.0]);
-    assert_eq!(&s.shape(), &[3]);
+    assert_eq!(&s.shape().as_ref(), &[3]);
 }
 
 #[test]
@@ -850,7 +896,7 @@ fn sum_3x2_to_2_keepdim() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     let s = t.sum(Some(&[1]), true);
     assert_eq!(&s.to_data_f32(), &[6.0, 15.0]);
-    assert_eq!(&s.shape(), &[2, 1]);
+    assert_eq!(&s.shape().as_ref(), &[2, 1]);
 }
 
 #[test]
@@ -858,7 +904,7 @@ fn sum_2x2x2_to_2_keepdim() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 2, 2]);
     let s = t.sum(Some(&[1]), true);
     assert_eq!(&s.to_data_f32(), &[4.0, 6.0, 12.0, 14.0]);
-    assert_eq!(&s.shape(), &[2, 1, 2]);
+    assert_eq!(&s.shape().as_ref(), &[2, 1, 2]);
 }
 
 #[test]
@@ -866,7 +912,7 @@ fn sum_3x2_t_to_3() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]).transpose();
     let s = t.sum(Some(&[1]), false);
     assert_eq!(&s.to_data_f32(), &[5.0, 7.0, 9.0]);
-    assert_eq!(&s.shape(), &[3]);
+    assert_eq!(&s.shape().as_ref(), &[3]);
 }
 
 #[test]
@@ -874,7 +920,7 @@ fn sum_2x2_to_scalar() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let s = t.sum(None, false);
     assert_eq!(&s.to_data_f32(), &[10.0]);
-    assert_eq!(&s.shape(), &[]);
+    assert_eq!(&s.shape().as_ref(), &[]);
 }
 
 #[test]
@@ -882,7 +928,7 @@ fn sum_2x2_to_scalar_keepdim() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let s = t.sum(None, true);
     assert_eq!(&s.to_data_f32(), &[10.0]);
-    assert_eq!(&s.shape(), &[1, 1]);
+    assert_eq!(&s.shape().as_ref(), &[1, 1]);
 }
 
 #[test]
@@ -890,7 +936,7 @@ fn broadcast_1d() {
     let t = Tensor::from_data_f32(&[1.0], &[1]);
     let r = t.broadcast(&[(0, 4)]);
     assert_eq!(&r.to_data_f32(), &[1.0, 1.0, 1.0, 1.0]);
-    assert_eq!(&r.shape(), &[4]);
+    assert_eq!(&r.shape().as_ref(), &[4]);
 }
 
 #[test]
@@ -898,7 +944,7 @@ fn broadcast_1x1_to_3x2() {
     let t = Tensor::from_data_f32(&[1.0], &[1, 1]);
     let r = t.broadcast(&[(0, 2), (1, 3)]);
     assert_eq!(&r.to_data_f32(), &[1.0, 1.0, 1.0, 1.0, 1.0, 1.0]);
-    assert_eq!(&r.shape(), &[2, 3]);
+    assert_eq!(&r.shape().as_ref(), &[2, 3]);
 }
 #[test]
 
@@ -906,5 +952,5 @@ fn broadcast_2x1x2_to_2x2x2() {
     let t = Tensor::from_data_f32(&[1.0, 2.0, 3.0, 4.0], &[2, 1, 2]);
     let r = t.broadcast(&[(1, 2)]);
     assert_eq!(&r.to_data_f32(), &[1.0, 2.0, 1.0, 2.0, 3.0, 4.0, 3.0, 4.0]);
-    assert_eq!(&r.shape(), &[2, 2, 2]);
+    assert_eq!(&r.shape().as_ref(), &[2, 2, 2]);
 }

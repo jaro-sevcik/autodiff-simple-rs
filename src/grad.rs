@@ -3,25 +3,25 @@ use std::cell::RefCell;
 use std::fmt::Debug;
 use std::rc::Rc;
 
-use crate::tensor::Tensor;
+use crate::tensor::{Shape, Tensor};
 use crate::trace::*;
 
 // Captured grad trace graph.
 #[derive(Clone)]
 struct LinearGraph<T> {
-    expressions: Vec<(Vec<usize>, LinearExpression<T>)>,
-    input_shapes: Vec<Vec<usize>>,
+    expressions: Vec<(Shape, LinearExpression<T>)>,
+    input_shapes: Vec<Shape>,
 }
 
 impl<T> LinearGraph<T> {
-    fn new(input_shapes: Vec<Vec<usize>>) -> Self {
+    fn new(input_shapes: Vec<Shape>) -> Self {
         Self {
             expressions: Vec::new(),
             input_shapes,
         }
     }
 
-    fn shape_for(&self, value: &LinearExpressionValue) -> Vec<usize> {
+    fn shape_for(&self, value: &LinearExpressionValue) -> Shape {
         match value {
             LinearExpressionValue::ExpressionIndex(i) => self.expressions[*i].0.clone(),
             LinearExpressionValue::Input(i) => self.input_shapes[*i].clone(),
@@ -48,7 +48,7 @@ where
 enum LinearExpressionValue {
     Input(usize),
     ExpressionIndex(usize),
-    Zero(Vec<usize>),
+    Zero(Shape),
 }
 
 impl Debug for LinearExpressionValue {
@@ -76,16 +76,16 @@ struct LinearExpressionEvaluationContext<T: Trace> {
 }
 
 impl<T: Trace> LinearExpressionEvaluationContext<T> {
-    fn new(input_shapes: &[Vec<usize>], expression_shapes: &[Vec<usize>], trace: &T) -> Self {
+    fn new(input_shapes: &[Shape], expression_shapes: &[Shape], trace: &T) -> Self {
         // TODO create the state with correct shapes!
         // let inputs = input_shapes.iter().map(|s| Tensor::zeros(&s)).collect();
         let values: Vec<<T as Trace>::Tracer> = expression_shapes
             .iter()
-            .map(|s| trace.constant(Tensor::zeros(&s)))
+            .map(|s| trace.constant(Tensor::zeros(s.clone())))
             .collect();
         let inputs: Vec<<T as Trace>::Tracer> = input_shapes
             .iter()
-            .map(|s| trace.constant(Tensor::zeros(&s)))
+            .map(|s| trace.constant(Tensor::zeros(s.clone())))
             .collect();
         Self { values, inputs }
     }
@@ -108,7 +108,7 @@ pub struct GradTracer<T> {
 }
 
 impl<T: Shaped> Shaped for GradTracer<T> {
-    fn shape(&self) -> Vec<usize> {
+    fn shape(&self) -> Shape {
         self.value.shape()
     }
 }
@@ -126,7 +126,7 @@ pub struct GradTrace<Inner: Trace> {
 }
 
 impl<Inner: Trace> GradTrace<Inner> {
-    fn new(inner: Inner, input_shapes: Vec<Vec<usize>>) -> Self {
+    fn new(inner: Inner, input_shapes: Vec<Shape>) -> Self {
         let linear_grad_graph = Rc::new(RefCell::new(LinearGraph::new(input_shapes)));
         Self {
             inner,
@@ -134,7 +134,7 @@ impl<Inner: Trace> GradTrace<Inner> {
         }
     }
 
-    fn add_expression(&self, shape: Vec<usize>, op: LinearExpression<Inner::Tracer>) -> usize {
+    fn add_expression(&self, shape: Shape, op: LinearExpression<Inner::Tracer>) -> usize {
         let mut graph = self.linear_grad_graph.borrow_mut();
         graph.expressions.push((shape, op));
         graph.expressions.len() - 1
@@ -144,7 +144,7 @@ impl<Inner: Trace> GradTrace<Inner> {
         &self,
         lhs: LinearExpressionValue,
         rhs: LinearExpressionValue,
-        shape: Vec<usize>,
+        shape: Shape,
     ) -> LinearExpressionValue {
         if let LinearExpressionValue::Zero(_) = lhs {
             return rhs;
@@ -160,7 +160,7 @@ impl<Inner: Trace> GradTrace<Inner> {
         &self,
         lhs: LinearExpressionValue,
         rhs: Inner::Tracer,
-        shape: Vec<usize>,
+        shape: Shape,
     ) -> LinearExpressionValue {
         if let LinearExpressionValue::Zero(_) = lhs {
             return LinearExpressionValue::Zero(shape);
@@ -173,7 +173,7 @@ impl<Inner: Trace> GradTrace<Inner> {
         &self,
         lhs: Inner::Tracer,
         rhs: LinearExpressionValue,
-        shape: Vec<usize>,
+        shape: Shape,
     ) -> LinearExpressionValue {
         if let LinearExpressionValue::Zero(_) = rhs {
             return LinearExpressionValue::Zero(shape);
@@ -186,7 +186,7 @@ impl<Inner: Trace> GradTrace<Inner> {
         &self,
         lhs: LinearExpressionValue,
         rhs: Inner::Tracer,
-        shape: Vec<usize>,
+        shape: Shape,
     ) -> LinearExpressionValue {
         if let LinearExpressionValue::Zero(_) = lhs {
             return lhs;
@@ -195,11 +195,7 @@ impl<Inner: Trace> GradTrace<Inner> {
         LinearExpressionValue::ExpressionIndex(index)
     }
 
-    fn linear_reshape(
-        &self,
-        shape: Vec<usize>,
-        input: LinearExpressionValue,
-    ) -> LinearExpressionValue {
+    fn linear_reshape(&self, shape: Shape, input: LinearExpressionValue) -> LinearExpressionValue {
         if let LinearExpressionValue::Zero(_) = input {
             return LinearExpressionValue::Zero(shape);
         }
@@ -207,16 +203,17 @@ impl<Inner: Trace> GradTrace<Inner> {
         LinearExpressionValue::ExpressionIndex(index)
     }
 
-    fn linear_zero(&self, shape: Vec<usize>) -> LinearExpressionValue {
+    fn linear_zero(&self, shape: Shape) -> LinearExpressionValue {
         LinearExpressionValue::Zero(shape)
     }
 
-    fn evaluate_graph(
-        &self,
-        result: LinearExpressionValue,
-    ) -> Vec<Inner::Tracer> {
+    fn evaluate_graph(&self, result: LinearExpressionValue) -> Vec<Inner::Tracer> {
         let graph = self.linear_grad_graph.borrow();
-        let expression_shapes: Vec<Vec<usize>> = graph.expressions.iter().map(|(shape, _)| shape.clone()).collect();
+        let expression_shapes: Vec<Shape> = graph
+            .expressions
+            .iter()
+            .map(|(shape, _)| shape.clone())
+            .collect();
         let mut context = LinearExpressionEvaluationContext::<Inner>::new(
             &graph.input_shapes,
             &expression_shapes,
@@ -249,7 +246,7 @@ impl<Inner: Trace> GradTrace<Inner> {
                 }
                 LinearExpression::Reshape(grad) => {
                     let shape = graph.shape_for(grad);
-                    context.add_to_value(grad, &self.inner.reshape(&shape, &v), &self.inner)
+                    context.add_to_value(grad, &self.inner.reshape(shape, &v), &self.inner)
                 }
             }
         }
@@ -319,8 +316,8 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
             }
             Primitive::Reshape(shape) => {
                 assert_eq!(inputs.len(), 1);
-                let value = self.inner.reshape(shape, &inputs[0].value);
-                let grad_value = self.linear_reshape(shape.to_vec(), inputs[0].grad.clone()); // TODO provide correct operator!
+                let value = self.inner.reshape(shape.clone(), &inputs[0].value);
+                let grad_value = self.linear_reshape(shape.clone(), inputs[0].grad.clone()); // TODO provide correct operator!
                 vec![Self::Tracer::new(value, grad_value)]
             }
             Primitive::Block(b) => evaluate_block(self, b, inputs),
@@ -330,7 +327,7 @@ impl<Inner: Trace> Trace for GradTrace<Inner> {
 
 pub fn grad<T: Trace + Clone, GF>(
     fun: GF,
-    mut grad_input_count: usize,
+    grad_input_count: usize,
 ) -> impl Fn(&T, &[T::Tracer]) -> Vec<T::Tracer>
 where
     GF: Fn(
@@ -341,7 +338,10 @@ where
 {
     move |trace, values| {
         assert!(grad_input_count <= values.len());
-        let grad_input_shapes = values[..grad_input_count].iter().map(|v| v.shape()).collect();
+        let grad_input_shapes = values[..grad_input_count]
+            .iter()
+            .map(|v| v.shape())
+            .collect();
         let grad_trace = GradTrace::new(trace.clone(), grad_input_shapes);
         let parameter_tracers: Vec<GradTracer<T::Tracer>> = (0..values.len())
             .map(|i| {
@@ -363,9 +363,7 @@ where
             grad_trace.linear_grad_graph.borrow()
         );
         assert_eq!(result.len(), 1);
-        grad_trace.evaluate_graph(
-            result[0].grad.clone(),
-        )
+        grad_trace.evaluate_graph(result[0].grad.clone())
     }
 }
 
