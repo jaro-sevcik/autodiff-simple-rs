@@ -368,12 +368,14 @@ where
             .map(|v| v.shape())
             .collect();
         let grad_trace = GradTrace::new(trace.clone(), grad_input_shapes);
-        let parameter_tracers: Vec<GradTracer<T::Tracer>> = (0..values.len())
-            .map(|i| {
+        let parameter_tracers: Vec<GradTracer<T::Tracer>> = values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
                 let grad = if i < grad_input_count {
                     LinearExpressionValue::Input(i)
                 } else {
-                    LinearExpressionValue::Zero(values[i].shape())
+                    LinearExpressionValue::Zero(v.shape())
                 };
                 GradTracer::<T::Tracer>::new(values[i].clone(), grad)
             })

@@ -1,7 +1,7 @@
 use std::cmp::PartialEq;
 use std::convert::From;
 use std::fmt::Debug;
-use std::iter::Iterator;
+use std::iter::{zip, Iterator};
 use std::ops::{Add, Index, Mul};
 use std::sync::Arc;
 
@@ -70,7 +70,11 @@ impl ShapeStride {
         self.strides[dim]
     }
 
-    pub fn size(&self) -> usize {
+    pub fn size(&self, dim: usize) -> usize {
+        self.shape[dim]
+    }
+
+    pub fn total_size(&self) -> usize {
         self.shape.size()
     }
 
@@ -90,14 +94,12 @@ impl ShapeStride {
     }
 
     pub fn to_shape_dimensions(&self) -> Vec<ShapeDimension> {
-        let mut res = Vec::with_capacity(self.shape.dims());
-        for i in 0..self.shape.dims() {
-            res.push(ShapeDimension {
-                size: self.shape[i],
-                stride: self.strides[i],
-            });
-        }
-        res
+        zip(self.shape.as_ref(), &self.strides)
+            .map(|(size, stride)| ShapeDimension {
+                size: *size,
+                stride: *stride,
+            })
+            .collect()
     }
 }
 
@@ -227,7 +229,7 @@ impl Tensor {
             stride,
         } = self.shape_stride.dim(dims - 1);
         let mut dst_offset = 0;
-        let size = self.shape_stride.size();
+        let size = self.shape_stride.total_size();
         let mut data = vec![f32::default(); size];
         while let Some(mut src_offset) = index.next() {
             for _i in 0..dim_size {
@@ -369,17 +371,17 @@ impl Tensor {
         );
         for i in 0..d - 2 {
             assert_eq!(
-                self.shape_stride.dim(i).size,
-                other.shape_stride.dim(i).size,
+                self.shape_stride.size(i),
+                other.shape_stride.size(i),
                 "matmul requires same size of dimensions [0..dims-2]"
             );
         }
-        let m = self.shape_stride.dim(d - 2).size;
-        let n = other.shape_stride.dim(d - 1).size;
-        let k = self.shape_stride.dim(d - 1).size;
+        let m = self.shape_stride.size(d - 2);
+        let n = other.shape_stride.size(d - 1);
+        let k = self.shape_stride.size(d - 1);
         assert_eq!(
             k,
-            other.shape_stride.dim(d - 2).size,
+            other.shape_stride.size(d - 2),
             "matmul requires matching lhs[d-1] and rhs[d-2] dimension sizes"
         );
         match (self.storage.as_ref(), other.storage.as_ref()) {
@@ -389,7 +391,7 @@ impl Tensor {
                 result_shape_builder.add_low(n);
                 result_shape_builder.add_low(m);
                 for i in 0..d - 2 {
-                    let dim_size = self.shape_stride.dim(i).size;
+                    let dim_size = self.shape_stride.size(i);
                     result_shape_builder.add_low(dim_size);
                 }
                 let result_size = result_shape_builder.size();
@@ -442,7 +444,7 @@ impl Tensor {
     }
 
     pub fn reshape(&self, shape: Shape) -> Self {
-        let size = self.shape_stride.size();
+        let size = self.shape_stride.total_size();
         let new_size = shape.as_ref().iter().product();
         assert_eq!(
             size, new_size,
