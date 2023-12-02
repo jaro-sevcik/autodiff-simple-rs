@@ -2,7 +2,7 @@ use crate::eval_trace::EvalTrace;
 use crate::expr_trace::{jit, ExprTrace};
 use crate::grad::{grad, GradTrace};
 use crate::tensor::{Shape, Tensor};
-use crate::trace::Trace;
+use crate::trace::{Shaped, Trace};
 
 #[cfg(test)]
 #[ctor::ctor]
@@ -120,41 +120,52 @@ fn composed_jit_grad_multivar_mul() {
     assert_eq!(to_scalars(&jit_composed_fn(&EvalTrace {}, &[x])), [36.0]);
 }
 
-// Input shape: [1, 2]
-fn sum_via_matmul_fn<T: Trace>(trace: &T, values: &[T::Tracer]) -> Vec<T::Tracer> {
-    let value = &values[0];
-    let ones = trace.constant(Tensor::ones(Shape::from_iter([2, 1])));
-    let res = trace.reshape(Shape::from_iter([]), &trace.matmul(value, &ones));
+fn weighted_sum_fn<T: Trace>(trace: &T, inputs: &[T::Tracer]) -> Vec<T::Tracer> {
+    let values = &inputs[0];
+    let weights = &inputs[1];
+    let size = values.shape().size();
+    let value_vector = trace.reshape(Shape::from([1, size]), values);
+    let weight_vector = trace.reshape(Shape::from([size, 1]), weights);
+    let product = trace.matmul(&value_vector, &weight_vector);
+    let res = trace.reshape(Shape::from_iter([]), &product);
     vec![res]
 }
 
 #[test]
 fn eval_trivial_sum_via_matmul() {
-    let x = Tensor::from_data_f32(&[1.0, 2.0], &[1, 2]);
-    assert_eq!(to_scalars(&sum_via_matmul_fn(&EvalTrace {}, &[x])), [3.0]);
+    let x = Tensor::from_data_f32(&[1.0, 2.0], &[2]);
+    let w = Tensor::from_data_f32(&[1.0, 1.0], &[2]);
+    assert_eq!(to_scalars(&weighted_sum_fn(&EvalTrace {}, &[x, w])), [3.0]);
 }
 
 #[test]
 fn eval_grad_trivial_sum_via_matmul() {
-    let x = Tensor::from_data_f32(&[1.0, 2.0], &[1, 2]);
-    let grad_trivial_sum_via_matmul_fn = grad::<EvalTrace, _>(sum_via_matmul_fn, 1);
-    let result = grad_trivial_sum_via_matmul_fn(&EvalTrace {}, &[x]);
+    let x = Tensor::from_data_f32(&[1.0, 2.0], &[2]);
+    let w = Tensor::from_data_f32(&[1.0, 1.0], &[2]);
+    let grad_trivial_sum_via_matmul_fn = grad::<EvalTrace, _>(weighted_sum_fn, 1);
+    let result = grad_trivial_sum_via_matmul_fn(&EvalTrace {}, &[x, w]);
     assert_eq!(result[0].to_data_f32(), [1.0, 1.0]);
-    assert_eq!(result[0].shape().as_ref(), &[1, 2]);
+    assert_eq!(result[0].shape().as_ref(), &[2]);
 }
 
 #[test]
 fn eval_jit_trivial_sum_via_matmul() {
-    let x = Tensor::from_data_f32(&[1.0, 2.0], &[1, 2]);
-    let jit_sum_via_matmul_fn = jit::<EvalTrace, _>(sum_via_matmul_fn);
-    assert_eq!(to_scalars(&jit_sum_via_matmul_fn(&EvalTrace {}, &[x])), [3.0]);
+    let x = Tensor::from_data_f32(&[1.0, 2.0], &[2]);
+    let w = Tensor::from_data_f32(&[1.0, 1.0], &[2]);
+    let jit_sum_via_matmul_fn = jit::<EvalTrace, _>(weighted_sum_fn);
+    assert_eq!(
+        to_scalars(&jit_sum_via_matmul_fn(&EvalTrace {}, &[x, w])),
+        [3.0]
+    );
 }
 
 #[test]
 fn eval_jit_grad_trivial_sum_via_matmul() {
-    let x = Tensor::from_data_f32(&[1.0, 2.0], &[1, 2]);
-    let jit_of_grad_sum_via_matmul_fn = jit::<EvalTrace, _>(grad::<ExprTrace, _>(sum_via_matmul_fn, 1));
-    let result = jit_of_grad_sum_via_matmul_fn(&EvalTrace {}, &[x]);
+    let x = Tensor::from_data_f32(&[1.0, 2.0], &[2]);
+    let w = Tensor::from_data_f32(&[1.0, 1.0], &[2]);
+    let jit_of_grad_sum_via_matmul_fn =
+        jit::<EvalTrace, _>(grad::<ExprTrace, _>(weighted_sum_fn, 1));
+    let result = jit_of_grad_sum_via_matmul_fn(&EvalTrace {}, &[x, w]);
     assert_eq!(result[0].to_data_f32(), [1.0, 1.0]);
-    assert_eq!(result[0].shape().as_ref(), &[1, 2]);
+    assert_eq!(result[0].shape().as_ref(), &[2]);
 }

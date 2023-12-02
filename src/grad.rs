@@ -203,7 +203,11 @@ impl<Inner: Trace> GradTrace<Inner> {
         LinearExpressionValue::ExpressionIndex(index)
     }
 
-    fn linear_transpose(&self, shape: Shape, input: LinearExpressionValue) -> LinearExpressionValue {
+    fn linear_transpose(
+        &self,
+        shape: Shape,
+        input: LinearExpressionValue,
+    ) -> LinearExpressionValue {
         if let LinearExpressionValue::Zero(_) = input {
             return LinearExpressionValue::Zero(shape);
         }
@@ -246,12 +250,16 @@ impl<Inner: Trace> GradTrace<Inner> {
                 LinearExpression::Mul(grad, c) => {
                     context.add_to_value(grad, &self.inner.mul(&v, c), &self.inner)
                 }
-                LinearExpression::MatMulLeft(grad, c) => {
-                    context.add_to_value(grad, &self.inner.matmul(&v, &self.inner.transpose(c)), &self.inner)
-                }
-                LinearExpression::MatMulRight(c, grad) => {
-                    context.add_to_value(grad, &self.inner.matmul(&self.inner.transpose(c), &v), &self.inner)
-                }
+                LinearExpression::MatMulLeft(grad, c) => context.add_to_value(
+                    grad,
+                    &self.inner.matmul(&v, &self.inner.transpose(c)),
+                    &self.inner,
+                ),
+                LinearExpression::MatMulRight(c, grad) => context.add_to_value(
+                    grad,
+                    &self.inner.matmul(&self.inner.transpose(c), &v),
+                    &self.inner,
+                ),
                 LinearExpression::Reshape(grad) => {
                     let shape = graph.shape_for(grad);
                     context.add_to_value(grad, &self.inner.reshape(shape, &v), &self.inner)

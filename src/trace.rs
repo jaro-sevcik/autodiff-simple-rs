@@ -1,4 +1,5 @@
 use crate::tensor::{Shape, Tensor};
+use std::fmt::Debug;
 
 #[derive(Debug, Clone)]
 pub enum Primitive {
@@ -12,13 +13,6 @@ pub enum Primitive {
 }
 
 impl Primitive {
-    pub fn output_count(&self) -> usize {
-        match self {
-            Primitive::Block(b) => b.outputs.len(),
-            _ => 1,
-        }
-    }
-
     pub fn output_shapes<T: Shaped>(&self, input_shapes: &[&T]) -> Vec<Shape> {
         match self {
             Primitive::Mul => vec![input_shapes[0].shape()],
@@ -44,7 +38,7 @@ pub trait Shaped {
 
 // Represents the state captured during tracing.
 pub trait Trace {
-    type Tracer: Clone + Shaped;
+    type Tracer: Clone + Shaped + Debug;
     fn primitive(&self, prim: &Primitive, inputs: &[&Self::Tracer]) -> Vec<Self::Tracer>;
 
     fn add(&self, lhs: &Self::Tracer, rhs: &Self::Tracer) -> Self::Tracer {

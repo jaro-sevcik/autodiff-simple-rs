@@ -73,10 +73,20 @@ impl Shape {
         let l = self.len();
         assert!(self.len() >= 2);
         let mut result = self.0.as_ref().clone();
-        let t = result[l-1];
-        result[l-1] = result[l-2];
-        result[l-2] = t;
+        let t = result[l - 1];
+        result[l - 1] = result[l - 2];
+        result[l - 2] = t;
         Self::from(result)
+    }
+
+    pub fn size(&self) -> usize {
+        self.0.iter().fold(1, usize::mul)
+    }
+}
+
+impl<const N: usize> From<[usize; N]> for Shape {
+    fn from(value: [usize; N]) -> Self {
+        Self(Vec::from(value).into())
     }
 }
 
@@ -421,7 +431,10 @@ impl Tensor {
     pub fn reshape(&self, shape: Shape) -> Self {
         let size = self.shape.size();
         let new_size = shape.as_ref().iter().fold(1usize, |size, dim| size * dim);
-        assert_eq!(size, new_size, "Tensor can be only reshaped to same size tensors.");
+        assert_eq!(
+            size, new_size,
+            "Tensor can be only reshaped to same size tensors."
+        );
         // If the current shape is continuous, then just reuse the same storage with the new shape.
         let new_shape = ContiguousShapeBuilder::from_sizes(shape.as_ref()).finish();
         if self.shape.is_continuous() {
@@ -706,7 +719,7 @@ impl ContiguousShapeBuilder {
 
     fn from_sizes(sizes: &[usize]) -> Self {
         let mut builder = Self::new();
-        for s in sizes {
+        for s in sizes.iter().rev() {
             builder.add_low(*s);
         }
         builder
@@ -860,6 +873,14 @@ fn reshape_2x2_to_4() {
     let r = t.reshape(Shape::from_iter([4]));
     assert_eq!(&r.to_data_f32(), &[1.0, 2.0, 3.0, 4.0]);
     assert_eq!(&r.shape().as_ref(), &[4]);
+}
+
+#[test]
+fn reshape_2_to_2x1() {
+    let t = Tensor::from_data_f32(&[1.0, 2.0], &[2]);
+    let r = t.reshape(Shape::from_iter([2, 1]));
+    assert_eq!(&r.to_data_f32(), &[1.0, 2.0]);
+    assert_eq!(&r.shape().as_ref(), &[2, 1]);
 }
 
 #[test]
