@@ -21,9 +21,6 @@ impl PartialEq for ShapeDimension {
     fn eq(&self, other: &Self) -> bool {
         self.size == other.size
     }
-    fn ne(&self, other: &Self) -> bool {
-        self.size != other.size
-    }
 }
 
 pub enum TensorStorage {
@@ -54,12 +51,12 @@ impl From<Vec<ShapeDimension>> for ShapeStride {
 
 impl ShapeStride {
     pub fn new(shape: Shape, strides: Vec<usize>) -> Self {
-        assert_eq!(shape.len(), strides.len());
+        assert_eq!(shape.dims(), strides.len());
         ShapeStride { shape, strides }
     }
 
     pub fn dims(&self) -> usize {
-        self.shape.len()
+        self.shape.dims()
     }
 
     pub fn dim(&self, dim: usize) -> ShapeDimension {
@@ -69,14 +66,18 @@ impl ShapeStride {
         }
     }
 
+    pub fn stride(&self, dim: usize) -> usize {
+        self.strides[dim]
+    }
+
     pub fn size(&self) -> usize {
         self.shape.size()
     }
 
-    pub fn is_continuous(&self) -> bool {
+    pub fn is_contiguous(&self) -> bool {
         let mut last_size = 1usize;
         let mut last_stride = 1usize;
-        for i in (0..self.shape.len()).rev() {
+        for i in (0..self.shape.dims()).rev() {
             let size = self.shape[i];
             let stride = self.strides[i];
             if last_size * last_stride != stride {
@@ -85,12 +86,12 @@ impl ShapeStride {
             last_size = size;
             last_stride = stride;
         }
-        return true;
+        true
     }
 
     pub fn to_shape_dimensions(&self) -> Vec<ShapeDimension> {
-        let mut res = Vec::with_capacity(self.shape.len());
-        for i in (0..self.shape.len()).rev() {
+        let mut res = Vec::with_capacity(self.shape.dims());
+        for i in 0..self.shape.dims() {
             res.push(ShapeDimension {
                 size: self.shape[i],
                 stride: self.strides[i],
@@ -104,17 +105,15 @@ impl ShapeStride {
 pub struct Shape(Arc<Vec<usize>>);
 
 impl Shape {
-    pub fn len(&self) -> usize {
+    pub fn dims(&self) -> usize {
         self.0.len()
     }
 
     pub fn transpose(&self) -> Shape {
-        let l = self.len();
-        assert!(self.len() >= 2);
+        let l = self.dims();
+        assert!(self.dims() >= 2);
         let mut result = self.0.as_ref().clone();
-        let t = result[l - 1];
-        result[l - 1] = result[l - 2];
-        result[l - 2] = t;
+        result.swap(l - 1, l - 2);
         Self::from(result)
     }
 
@@ -133,9 +132,6 @@ impl PartialEq<[usize]> for Shape {
     fn eq(&self, other: &[usize]) -> bool {
         self.as_ref() == other
     }
-    fn ne(&self, other: &[usize]) -> bool {
-        self.as_ref() != other
-    }
 }
 
 impl From<Vec<usize>> for Shape {
@@ -152,7 +148,7 @@ impl FromIterator<usize> for Shape {
 
 impl AsRef<[usize]> for Shape {
     fn as_ref(&self) -> &[usize] {
-        &self.0.as_ref()
+        &self.0
     }
 }
 
@@ -200,7 +196,7 @@ impl Tensor {
     }
 
     pub fn from_constant_broadcast_f32(constant: f32, shape: Shape) -> Self {
-        let strides = vec![0usize; shape.len()];
+        let strides = vec![0usize; shape.dims()];
         Self {
             shape_stride: ShapeStride::new(shape, strides),
             storage: Arc::new(TensorStorage::Float32(vec![constant])),
@@ -250,8 +246,8 @@ impl Tensor {
             }
 
             let mut offset = 0;
-            for i in 0..index.len() {
-                offset += index[i] * self.shape_stride.dim(i).stride;
+            for (i, item) in index.iter().enumerate() {
+                offset += item * self.shape_stride.stride(i);
             }
             storage[offset]
         } else {
@@ -266,7 +262,8 @@ impl Tensor {
     pub fn add(&self, rhs: &Self) -> Self {
         // Make sure the shape and the type match.
         assert_eq!(
-            self.shape_stride, rhs.shape_stride,
+            self.shape(),
+            rhs.shape(),
             "Incompatible tensors - different shapes"
         );
         assert_eq!(
@@ -278,9 +275,9 @@ impl Tensor {
         match (self.storage.as_ref(), rhs.storage.as_ref()) {
             (TensorStorage::Float32(lhs_storage), TensorStorage::Float32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<f32, _>(
-                    &lhs_storage,
+                    lhs_storage,
                     &self.shape_stride,
-                    &rhs_storage,
+                    rhs_storage,
                     &rhs.shape_stride,
                     f32::add,
                     0.0f32,
@@ -292,9 +289,9 @@ impl Tensor {
             }
             (TensorStorage::Int32(lhs_storage), TensorStorage::Int32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<i32, _>(
-                    &lhs_storage,
+                    lhs_storage,
                     &self.shape_stride,
-                    &rhs_storage,
+                    rhs_storage,
                     &rhs.shape_stride,
                     i32::add,
                     0,
@@ -323,9 +320,9 @@ impl Tensor {
         match (self.storage.as_ref(), rhs.storage.as_ref()) {
             (TensorStorage::Float32(lhs_storage), TensorStorage::Float32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<f32, _>(
-                    &lhs_storage,
+                    lhs_storage,
                     &self.shape_stride,
-                    &rhs_storage,
+                    rhs_storage,
                     &rhs.shape_stride,
                     f32::mul,
                     0.0f32,
@@ -337,9 +334,9 @@ impl Tensor {
             }
             (TensorStorage::Int32(lhs_storage), TensorStorage::Int32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<i32, _>(
-                    &lhs_storage,
+                    lhs_storage,
                     &self.shape_stride,
-                    &rhs_storage,
+                    rhs_storage,
                     &rhs.shape_stride,
                     i32::mul,
                     0,
@@ -354,7 +351,6 @@ impl Tensor {
     }
 
     pub fn matmul(&self, other: &Self) -> Self {
-        // Propagate errors.
         assert_eq!(
             self.shape_stride.dims(),
             other.shape_stride.dims(),
@@ -416,9 +412,8 @@ impl Tensor {
                             let rhs_index = rhs_offset + j * other.shape_stride.dim(d - 1).stride;
                             let mut sum = 0.0;
                             for l in 0..k {
-                                sum = sum
-                                    + lhs_storage[lhs_index + l * lhs_stride]
-                                        * rhs_storage[rhs_index + l * rhs_stride];
+                                sum += lhs_storage[lhs_index + l * lhs_stride]
+                                    * rhs_storage[rhs_index + l * rhs_stride];
                             }
                             result_storage[result_offset] = sum;
                             result_offset += 1;
@@ -439,9 +434,7 @@ impl Tensor {
         let mut shape_dims = self.shape_stride.to_shape_dimensions();
 
         let d = shape_dims.len();
-        let t = shape_dims[d - 1];
-        shape_dims[d - 1] = shape_dims[d - 2];
-        shape_dims[d - 2] = t;
+        shape_dims.swap(d - 2, d - 1);
         Self {
             shape_stride: ShapeStride::from(shape_dims),
             storage: self.storage.clone(),
@@ -450,14 +443,14 @@ impl Tensor {
 
     pub fn reshape(&self, shape: Shape) -> Self {
         let size = self.shape_stride.size();
-        let new_size = shape.as_ref().iter().fold(1usize, |size, dim| size * dim);
+        let new_size = shape.as_ref().iter().product();
         assert_eq!(
             size, new_size,
             "Tensor can be only reshaped to same size tensors."
         );
         // If the current shape is continuous, then just reuse the same storage with the new shape.
         let new_shape = ContiguousShapeBuilder::from_sizes(shape.as_ref()).finish();
-        if self.shape_stride.is_continuous() {
+        if self.shape_stride.is_contiguous() {
             return Self {
                 shape_stride: new_shape,
                 storage: self.storage.clone(),
@@ -664,7 +657,7 @@ impl TensorIndex {
             .iter()
             .rev()
         {
-            res.add_low(dim.clone());
+            res.add_low(*dim);
         }
         res
     }

@@ -21,7 +21,7 @@ impl Primitive {
                 let mut result_shape = input_shapes[0].shape().as_ref().to_vec();
                 let result_len = result_shape.len();
                 let rhs_shape = input_shapes[1].shape();
-                result_shape[result_len - 1] = rhs_shape[rhs_shape.len() - 1];
+                result_shape[result_len - 1] = rhs_shape[rhs_shape.dims() - 1];
                 vec![Shape::from(result_shape)]
             }
             Primitive::Reshape(shape) => vec![shape.clone()],
@@ -68,15 +68,15 @@ pub enum TracedBlockVar {
     Input(usize),
 }
 
-impl TracedBlockVar {
-    fn to_string(&self) -> String {
+impl std::fmt::Display for TracedBlockVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Input(i) => format!("I{}", i),
+            Self::Input(i) => write!(f, "I{}", i),
             Self::Local(i, j) => {
                 if *j == 0 {
-                    format!("%{}", i)
+                    write!(f, "%{}", i)
                 } else {
-                    format!("%{}#{}", i, j)
+                    write!(f, "%{}#{}", i, j)
                 }
             }
         }
@@ -108,7 +108,7 @@ impl std::fmt::Debug for TracedBlock {
         d.entry(&ExprOutputsFormatHelper(&self.outputs));
         for i in 0..self.program.len() {
             let (prim, inputs) = &self.program[i];
-            d.entry(&EquationFormatHelper(i, &prim, &inputs));
+            d.entry(&EquationFormatHelper(i, prim, inputs));
         }
         d.finish()?;
         Ok(())
@@ -185,7 +185,7 @@ impl<'a> std::fmt::Debug for ExprOutputsFormatHelper<'a> {
         let output_list = self
             .0
             .iter()
-            .map(|(shape, i)| format!("{}@{:?}", i.to_string(), shape))
+            .map(|(shape, i)| format!("{}@{:?}", i, shape))
             .collect::<Vec<String>>()
             .join(" ");
         write!(f, "Outputs: {}", output_list)

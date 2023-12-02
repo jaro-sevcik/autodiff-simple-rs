@@ -389,23 +389,21 @@ where
 }
 
 // TODO plug into grad for `sum`.
-fn compute_reduce_shape(shape: &[usize], axis: Option<&[usize]>) -> Vec<usize> {
-    let dims = shape.len();
-    let mut result = Vec::new();
-    if let Some(axis) = axis {
-        let mut finger = axis.len();
-        for i in (0..dims).rev() {
-            if finger > 0 && axis[finger - 1] == i {
-                finger -= 1;
-                result.push(1);
-            } else {
-                result.push(shape[i]);
-            };
-        }
-    } else {
-        for _ in 0..dims {
-            result.push(1);
-        }
-    }
-    result
-}
+// fn compute_reduce_shape(shape: &[usize], axis: Option<&[usize]>) -> Vec<usize> {
+//     let dims = shape.len();
+//     let mut result = Vec::new();
+//     if let Some(axis) = axis {
+//         let mut finger = axis.len();
+//         for i in (0..dims).rev() {
+//             if finger > 0 && axis[finger - 1] == i {
+//                 finger -= 1;
+//                 result.push(1);
+//             } else {
+//                 result.push(shape[i]);
+//             };
+//         }
+//     } else {
+//         result = vec![1usize; dims];
+//     }
+//     result
+// }
