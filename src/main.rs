@@ -1,7 +1,7 @@
 mod eval_trace;
 mod expr_trace;
 mod grad;
-mod tensor;
+pub mod tensor;
 mod trace;
 
 #[cfg(test)]

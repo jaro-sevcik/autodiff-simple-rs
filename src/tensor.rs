@@ -32,36 +32,75 @@ pub enum TensorStorage {
 }
 
 #[derive(PartialEq, Debug, Clone)]
-pub struct ShapeStride(Vec<ShapeDimension>);
+pub struct ShapeStride {
+    shape: Shape,
+    strides: Vec<usize>,
+}
+
+impl From<Vec<ShapeDimension>> for ShapeStride {
+    fn from(shape_dims: Vec<ShapeDimension>) -> Self {
+        let mut sizes = Vec::with_capacity(shape_dims.len());
+        let mut strides = Vec::with_capacity(shape_dims.len());
+        for s in shape_dims {
+            sizes.push(s.size);
+            strides.push(s.stride);
+        }
+        Self {
+            shape: Shape::from(sizes),
+            strides,
+        }
+    }
+}
 
 impl ShapeStride {
+    pub fn new(shape: Shape, strides: Vec<usize>) -> Self {
+        assert_eq!(shape.len(), strides.len());
+        ShapeStride { shape, strides }
+    }
+
     pub fn dims(&self) -> usize {
-        self.0.len()
+        self.shape.len()
     }
 
     pub fn dim(&self, dim: usize) -> ShapeDimension {
-        self.0[dim]
+        ShapeDimension {
+            size: self.shape[dim],
+            stride: self.strides[dim],
+        }
     }
 
     pub fn size(&self) -> usize {
-        self.0.iter().fold(1usize, |size, dim| size * dim.size)
+        self.shape.size()
     }
 
     pub fn is_continuous(&self) -> bool {
         let mut last_size = 1usize;
         let mut last_stride = 1usize;
-        for ShapeDimension { size, stride } in self.0.iter().rev() {
-            if last_size * last_stride != *stride {
+        for i in (0..self.shape.len()).rev() {
+            let size = self.shape[i];
+            let stride = self.strides[i];
+            if last_size * last_stride != stride {
                 return false;
             }
-            last_size = *size;
-            last_stride = *stride;
+            last_size = size;
+            last_stride = stride;
         }
         return true;
     }
+
+    pub fn to_shape_dimensions(&self) -> Vec<ShapeDimension> {
+        let mut res = Vec::with_capacity(self.shape.len());
+        for i in (0..self.shape.len()).rev() {
+            res.push(ShapeDimension {
+                size: self.shape[i],
+                stride: self.strides[i],
+            });
+        }
+        res
+    }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Shape(Arc<Vec<usize>>);
 
 impl Shape {
@@ -127,7 +166,7 @@ impl Index<usize> for Shape {
 #[derive(Clone)]
 pub struct Tensor {
     storage: Arc<TensorStorage>,
-    shape: ShapeStride,
+    shape_stride: ShapeStride,
 }
 
 impl Tensor {
@@ -140,50 +179,30 @@ impl Tensor {
 
     pub fn from_scalar_f32(value: f32) -> Self {
         Self {
-            shape: ShapeStride(Vec::new()),
+            shape_stride: ContiguousShapeBuilder::new().finish(),
             storage: Arc::new(TensorStorage::Float32(vec![value])),
         }
     }
 
     pub fn from_scalar_i32(value: i32) -> Self {
         Self {
-            shape: ShapeStride(Vec::new()),
+            shape_stride: ContiguousShapeBuilder::new().finish(),
             storage: Arc::new(TensorStorage::Int32(vec![value])),
         }
     }
 
     pub fn from_data_f32(values: &[f32], shape: &[usize]) -> Self {
-        let mut size = 1usize;
-        let mut shape_dims = Vec::new();
-        for i in (0..shape.len()).rev() {
-            let dim_size = shape[i];
-            shape_dims.push(ShapeDimension {
-                size: dim_size,
-                stride: size,
-            });
-            size *= dim_size;
-        }
-        shape_dims.reverse();
-        assert_eq!(values.len(), size);
-
         let storage = Arc::new(TensorStorage::Float32(values.to_vec()));
         Self {
             storage,
-            shape: ShapeStride(shape_dims),
+            shape_stride: ContiguousShapeBuilder::from_sizes(shape).finish(),
         }
     }
 
     pub fn from_constant_broadcast_f32(constant: f32, shape: Shape) -> Self {
-        let tensor_shape = shape
-            .as_ref()
-            .iter()
-            .map(|size| ShapeDimension {
-                size: *size,
-                stride: 0,
-            })
-            .collect();
+        let strides = vec![0usize; shape.len()];
         Self {
-            shape: ShapeStride(tensor_shape),
+            shape_stride: ShapeStride::new(shape, strides),
             storage: Arc::new(TensorStorage::Float32(vec![constant])),
         }
     }
@@ -202,17 +221,17 @@ impl Tensor {
             _ => panic!("to_vec_f32 needs tensor with f32 storage"),
         };
 
-        let dims = self.shape.dims();
+        let dims = self.shape_stride.dims();
         if dims == 0 {
             return vec![storage[0]];
         }
-        let mut index = TensorIndex::from_shape(&self.shape, dims - 1);
+        let mut index = TensorIndex::from_shape(&self.shape_stride, dims - 1);
         let ShapeDimension {
             size: dim_size,
             stride,
-        } = self.shape.dim(dims - 1);
+        } = self.shape_stride.dim(dims - 1);
         let mut dst_offset = 0;
-        let size = self.shape.size();
+        let size = self.shape_stride.size();
         let mut data = vec![f32::default(); size];
         while let Some(mut src_offset) = index.next() {
             for _i in 0..dim_size {
@@ -226,13 +245,13 @@ impl Tensor {
 
     pub fn get_item_f32(&self, index: &[usize]) -> f32 {
         if let TensorStorage::Float32(storage) = self.storage.as_ref() {
-            if self.shape.dims() != index.len() {
+            if self.shape_stride.dims() != index.len() {
                 panic!("Invalid index (dimension count mismatch)");
             }
 
             let mut offset = 0;
             for i in 0..index.len() {
-                offset += index[i] * self.shape.dim(i).stride;
+                offset += index[i] * self.shape_stride.dim(i).stride;
             }
             storage[offset]
         } else {
@@ -241,13 +260,13 @@ impl Tensor {
     }
 
     pub fn shape(&self) -> Shape {
-        self.shape.0.iter().map(|s| s.size).collect()
+        self.shape_stride.shape.clone()
     }
 
     pub fn add(&self, rhs: &Self) -> Self {
         // Make sure the shape and the type match.
         assert_eq!(
-            self.shape, rhs.shape,
+            self.shape_stride, rhs.shape_stride,
             "Incompatible tensors - different shapes"
         );
         assert_eq!(
@@ -260,28 +279,28 @@ impl Tensor {
             (TensorStorage::Float32(lhs_storage), TensorStorage::Float32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<f32, _>(
                     &lhs_storage,
-                    &self.shape,
+                    &self.shape_stride,
                     &rhs_storage,
-                    &rhs.shape,
+                    &rhs.shape_stride,
                     f32::add,
                     0.0f32,
                 );
                 Tensor {
-                    shape,
+                    shape_stride: shape,
                     storage: Arc::new(TensorStorage::Float32(result)),
                 }
             }
             (TensorStorage::Int32(lhs_storage), TensorStorage::Int32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<i32, _>(
                     &lhs_storage,
-                    &self.shape,
+                    &self.shape_stride,
                     &rhs_storage,
-                    &rhs.shape,
+                    &rhs.shape_stride,
                     i32::add,
                     0,
                 );
                 Tensor {
-                    shape,
+                    shape_stride: shape,
                     storage: Arc::new(TensorStorage::Int32(result)),
                 }
             }
@@ -292,7 +311,7 @@ impl Tensor {
     pub fn mul(&self, rhs: &Self) -> Self {
         // Make sure the shape and the type match.
         assert_eq!(
-            self.shape, rhs.shape,
+            self.shape_stride, rhs.shape_stride,
             "Incompatible tensors - different shapes"
         );
         assert_eq!(
@@ -305,28 +324,28 @@ impl Tensor {
             (TensorStorage::Float32(lhs_storage), TensorStorage::Float32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<f32, _>(
                     &lhs_storage,
-                    &self.shape,
+                    &self.shape_stride,
                     &rhs_storage,
-                    &rhs.shape,
+                    &rhs.shape_stride,
                     f32::mul,
                     0.0f32,
                 );
                 Tensor {
-                    shape,
+                    shape_stride: shape,
                     storage: Arc::new(TensorStorage::Float32(result)),
                 }
             }
             (TensorStorage::Int32(lhs_storage), TensorStorage::Int32(rhs_storage)) => {
                 let (shape, result) = pointwise_binop::<i32, _>(
                     &lhs_storage,
-                    &self.shape,
+                    &self.shape_stride,
                     &rhs_storage,
-                    &rhs.shape,
+                    &rhs.shape_stride,
                     i32::mul,
                     0,
                 );
                 Tensor {
-                    shape,
+                    shape_stride: shape,
                     storage: Arc::new(TensorStorage::Int32(result)),
                 }
             }
@@ -337,34 +356,34 @@ impl Tensor {
     pub fn matmul(&self, other: &Self) -> Self {
         // Propagate errors.
         assert_eq!(
-            self.shape.dims(),
-            other.shape.dims(),
+            self.shape_stride.dims(),
+            other.shape_stride.dims(),
             "matmul requires tensor of same dimensions"
         );
-        let d = self.shape.dims();
+        let d = self.shape_stride.dims();
         assert!(
             d >= 2,
             "matmul operands must have at least two dimensions, left operand has {}",
             d
         );
         assert!(
-            other.shape.dims() >= 2,
+            other.shape_stride.dims() >= 2,
             "matmul operands must have at least two dimensions, right operand has {}",
-            other.shape.dims()
+            other.shape_stride.dims()
         );
         for i in 0..d - 2 {
             assert_eq!(
-                self.shape.dim(i).size,
-                other.shape.dim(i).size,
+                self.shape_stride.dim(i).size,
+                other.shape_stride.dim(i).size,
                 "matmul requires same size of dimensions [0..dims-2]"
             );
         }
-        let m = self.shape.dim(d - 2).size;
-        let n = other.shape.dim(d - 1).size;
-        let k = self.shape.dim(d - 1).size;
+        let m = self.shape_stride.dim(d - 2).size;
+        let n = other.shape_stride.dim(d - 1).size;
+        let k = self.shape_stride.dim(d - 1).size;
         assert_eq!(
             k,
-            other.shape.dim(d - 2).size,
+            other.shape_stride.dim(d - 2).size,
             "matmul requires matching lhs[d-1] and rhs[d-2] dimension sizes"
         );
         match (self.storage.as_ref(), other.storage.as_ref()) {
@@ -374,27 +393,27 @@ impl Tensor {
                 result_shape_builder.add_low(n);
                 result_shape_builder.add_low(m);
                 for i in 0..d - 2 {
-                    let dim_size = self.shape.dim(i).size;
+                    let dim_size = self.shape_stride.dim(i).size;
                     result_shape_builder.add_low(dim_size);
                 }
                 let result_size = result_shape_builder.size();
                 let mut result_storage = vec![0.0f32; result_size];
                 let result_shape = result_shape_builder.finish();
                 let mut result_offset = 0usize;
-                let mut lhs_tensor_index = TensorIndex::from_shape(&self.shape, d - 2);
-                let mut rhs_tensor_index = TensorIndex::from_shape(&other.shape, d - 2);
+                let mut lhs_tensor_index = TensorIndex::from_shape(&self.shape_stride, d - 2);
+                let mut rhs_tensor_index = TensorIndex::from_shape(&other.shape_stride, d - 2);
 
-                let lhs_stride = self.shape.dim(d - 1).stride;
-                let rhs_stride = other.shape.dim(d - 2).stride;
+                let lhs_stride = self.shape_stride.dim(d - 1).stride;
+                let rhs_stride = other.shape_stride.dim(d - 2).stride;
 
                 while result_offset < result_size {
                     let lhs_offset = lhs_tensor_index.next().unwrap();
                     let rhs_offset = rhs_tensor_index.next().unwrap();
 
                     for i in 0..m {
-                        let lhs_index = lhs_offset + i * self.shape.dim(d - 2).stride;
+                        let lhs_index = lhs_offset + i * self.shape_stride.dim(d - 2).stride;
                         for j in 0..n {
-                            let rhs_index = rhs_offset + j * other.shape.dim(d - 1).stride;
+                            let rhs_index = rhs_offset + j * other.shape_stride.dim(d - 1).stride;
                             let mut sum = 0.0;
                             for l in 0..k {
                                 sum = sum
@@ -407,7 +426,7 @@ impl Tensor {
                     }
                 }
                 Self {
-                    shape: result_shape,
+                    shape_stride: result_shape,
                     storage: Arc::new(TensorStorage::Float32(result_storage)),
                 }
             }
@@ -417,19 +436,20 @@ impl Tensor {
 
     // Transposes the last two axes.
     pub fn transpose(&self) -> Self {
-        let mut shape = self.shape.clone();
-        let d = shape.dims();
-        let t = shape.0[d - 1];
-        shape.0[d - 1] = shape.0[d - 2];
-        shape.0[d - 2] = t;
+        let mut shape_dims = self.shape_stride.to_shape_dimensions();
+
+        let d = shape_dims.len();
+        let t = shape_dims[d - 1];
+        shape_dims[d - 1] = shape_dims[d - 2];
+        shape_dims[d - 2] = t;
         Self {
-            shape,
+            shape_stride: ShapeStride::from(shape_dims),
             storage: self.storage.clone(),
         }
     }
 
     pub fn reshape(&self, shape: Shape) -> Self {
-        let size = self.shape.size();
+        let size = self.shape_stride.size();
         let new_size = shape.as_ref().iter().fold(1usize, |size, dim| size * dim);
         assert_eq!(
             size, new_size,
@@ -437,18 +457,18 @@ impl Tensor {
         );
         // If the current shape is continuous, then just reuse the same storage with the new shape.
         let new_shape = ContiguousShapeBuilder::from_sizes(shape.as_ref()).finish();
-        if self.shape.is_continuous() {
+        if self.shape_stride.is_continuous() {
             return Self {
-                shape: new_shape,
+                shape_stride: new_shape,
                 storage: self.storage.clone(),
             };
         }
 
         // Otherwise we need to copy.
-        let dims = self.shape.dims();
-        let mut index = TensorIndex::from_shape(&self.shape, dims - 1);
+        let dims = self.shape_stride.dims();
+        let mut index = TensorIndex::from_shape(&self.shape_stride, dims - 1);
         let ShapeDimension { size, stride } = if dims > 0 {
-            self.shape.dim(dims - 1)
+            self.shape_stride.dim(dims - 1)
         } else {
             ShapeDimension { size: 1, stride: 1 }
         };
@@ -465,7 +485,7 @@ impl Tensor {
                 }
                 Self {
                     storage: Arc::new(TensorStorage::Float32(storage)),
-                    shape: new_shape,
+                    shape_stride: new_shape,
                 }
             }
             TensorStorage::Int32(old_storage) => {
@@ -479,20 +499,19 @@ impl Tensor {
                 }
                 Self {
                     storage: Arc::new(TensorStorage::Int32(storage)),
-                    shape: new_shape,
+                    shape_stride: new_shape,
                 }
             }
-            _ => self.clone(),
         }
     }
 
     pub fn broadcast(&self, dim_size_pairs: &[(usize, usize)]) -> Self {
-        let mut shape_dims = self.shape.0.clone();
+        let mut shape_dims = self.shape_stride.to_shape_dimensions();
         let mut last_dim: Option<usize> = None;
         for (dim, size) in dim_size_pairs {
             assert!(
                 last_dim.is_none() || last_dim.unwrap() < *dim,
-                "Broadcst (dimension, size) pairs must be sorted by dimension index"
+                "Broadcast (dimension, size) pairs must be sorted by dimension index"
             );
             assert_eq!(
                 shape_dims[*dim].size, 1usize,
@@ -506,13 +525,13 @@ impl Tensor {
             last_dim = Some(*dim)
         }
         Self {
-            shape: ShapeStride(shape_dims),
+            shape_stride: ShapeStride::from(shape_dims),
             storage: self.storage.clone(),
         }
     }
 
     pub fn sum(&self, axis: Option<&[usize]>, keep_dim: bool) -> Self {
-        let dims = self.shape.dims();
+        let dims = self.shape_stride.dims();
         let mut other_index = TensorIndex::new();
         let mut sum_index;
         let mut shape_builder = ContiguousShapeBuilder::new();
@@ -522,17 +541,17 @@ impl Tensor {
             for i in (0..dims).rev() {
                 if finger > 0 && axis[finger - 1] == i {
                     finger -= 1;
-                    sum_index.add_low(self.shape.dim(i));
+                    sum_index.add_low(self.shape_stride.dim(i));
                     if keep_dim {
                         shape_builder.add_low(1);
                     }
                 } else {
-                    other_index.add_low(self.shape.dim(i));
-                    shape_builder.add_low(self.shape.dim(i).size);
+                    other_index.add_low(self.shape_stride.dim(i));
+                    shape_builder.add_low(self.shape_stride.dim(i).size);
                 };
             }
         } else {
-            sum_index = TensorIndex::from_shape(&self.shape, dims);
+            sum_index = TensorIndex::from_shape(&self.shape_stride, dims);
             if keep_dim {
                 for _ in 0..dims {
                     shape_builder.add_low(1);
@@ -554,7 +573,7 @@ impl Tensor {
                     result_offset += 1;
                 }
                 Self {
-                    shape: shape_builder.finish(),
+                    shape_stride: shape_builder.finish(),
                     storage: TensorStorage::Float32(result_storage).into(),
                 }
             }
@@ -570,7 +589,8 @@ impl Debug for Tensor {
             TensorStorage::Float32(storage) => write!(f, "{:?}", storage)?,
             TensorStorage::Int32(storage) => write!(f, "{:?}", storage)?,
         }
-        write!(f, ", shape: {:?}", self.shape.0)?;
+        write!(f, ", shape: {:?}", self.shape_stride.shape)?;
+        write!(f, ", strides: {:?}", self.shape_stride.strides)?;
         write!(f, ">")?;
         Ok(())
     }
@@ -600,8 +620,8 @@ where
     let rhs_stride = rhs_shape.dim(d - 1).stride;
 
     let mut result_shape_builder = ContiguousShapeBuilder::new();
-    for d in lhs_shape.0.iter().rev() {
-        result_shape_builder.add_low(d.size);
+    for size in lhs_shape.shape.as_ref().iter().rev() {
+        result_shape_builder.add_low(*size);
     }
     let mut result_storage = vec![init; result_shape_builder.size()];
     let result_shape = result_shape_builder.finish();
@@ -639,7 +659,8 @@ struct TensorIndex {
 impl TensorIndex {
     pub fn from_shape(shape: &ShapeStride, dimensions: usize) -> Self {
         let mut res = Self::with_capacity(dimensions);
-        for dim in shape.0[..usize::min(dimensions, shape.0.len())]
+        let shape_dims = shape.to_shape_dimensions();
+        for dim in shape_dims[..usize::min(dimensions, shape_dims.len())]
             .iter()
             .rev()
         {
@@ -740,7 +761,7 @@ impl ContiguousShapeBuilder {
     fn finish(self) -> ShapeStride {
         let mut dims = self.dims;
         dims.reverse();
-        ShapeStride(dims)
+        ShapeStride::from(dims)
     }
 }
 
