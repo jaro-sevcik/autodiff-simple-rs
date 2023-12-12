@@ -17,12 +17,6 @@ pub struct ShapeDimension {
     pub stride: usize,
 }
 
-impl PartialEq for ShapeDimension {
-    fn eq(&self, other: &Self) -> bool {
-        self.size == other.size
-    }
-}
-
 pub enum TensorStorage {
     Float32(Vec<f32>),
     Int32(Vec<i32>),
